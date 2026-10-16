@@ -198,51 +198,6 @@
       ]
     },
     {
-      "name": "331-seg-adr",
-      "target": "bin/governance-paths.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "gov-",
-      "edits": [
-        {
-          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
-          "to": "    */.claude/*|*/.github/*|*/adrs/*) return 0 ;;\n"
-        }
-      ],
-      "expect_fail": [
-        "gov-builtin-rules"
-      ]
-    },
-    {
-      "name": "331-seg-adrs",
-      "target": "bin/governance-paths.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "gov-",
-      "edits": [
-        {
-          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
-          "to": "    */.claude/*|*/.github/*|*/adr/*) return 0 ;;\n"
-        }
-      ],
-      "expect_fail": [
-        "gov-builtin-rules"
-      ]
-    },
-    {
-      "name": "331-seg-substring",
-      "target": "bin/governance-paths.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "gov-",
-      "edits": [
-        {
-          "from": "    */.claude/*|*/.github/*|*/adr/*|*/adrs/*) return 0 ;;\n",
-          "to": "    */.claude/*|*/.github/*|*adr*|*/adrs/*) return 0 ;;\n"
-        }
-      ],
-      "expect_fail": [
-        "gov-builtin-rules"
-      ]
-    },
-    {
       "name": "331-final-claude-md",
       "target": "bin/governance-paths.sh",
       "suite": "dev/doctor-tests.sh",
@@ -256,21 +211,6 @@
       "expect_fail": [
         "gov-builtin-rules",
         "gov-declared-from-base"
-      ]
-    },
-    {
-      "name": "331-final-action-yml",
-      "target": "bin/governance-paths.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "gov-",
-      "edits": [
-        {
-          "from": "    claude.md|action.yml|action.yaml) return 0 ;;\n",
-          "to": "    claude.md|action.yaml) return 0 ;;\n"
-        }
-      ],
-      "expect_fail": [
-        "gov-builtin-rules"
       ]
     },
     {
@@ -327,22 +267,6 @@
         {
           "from": "    is_gov=false\n    is_builtin \"$lp\" && is_gov=true\n    if ! $is_gov && is_declared \"$lp\"; then\n      is_gov=true\n    fi\n",
           "to": "    is_gov=false\n    is_builtin \"$lp\" && is_gov=true\n"
-        }
-      ],
-      "expect_fail": [
-        "gov-declared-globs",
-        "gov-declared-from-base"
-      ]
-    },
-    {
-      "name": "331-declared-replaces-builtin",
-      "target": "bin/governance-paths.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "gov-",
-      "edits": [
-        {
-          "from": "    is_gov=false\n    is_builtin \"$lp\" && is_gov=true\n    if ! $is_gov && is_declared \"$lp\"; then\n      is_gov=true\n    fi\n",
-          "to": "    is_gov=false\n    if [ -n \"$gp_globs\" ]; then\n      is_declared \"$lp\" && is_gov=true\n    else\n      is_builtin \"$lp\" && is_gov=true\n    fi\n"
         }
       ],
       "expect_fail": [
@@ -499,21 +423,6 @@
       ],
       "expect_fail": [
         "gov-missing-object"
-      ]
-    },
-    {
-      "name": "331-control-char",
-      "target": "bin/governance-paths.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "gov-",
-      "edits": [
-        {
-          "from": "    case \"$p\" in\n      *[[:cntrl:]]*) error_out \"a changed path contains a control character\" 1 ;;\n    esac\n",
-          "to": "    case \"$p\" in\n    esac\n"
-        }
-      ],
-      "expect_fail": [
-        "gov-control-char-path"
       ]
     },
     {
@@ -802,21 +711,6 @@
       ]
     },
     {
-      "name": "408-cx-substring-guard",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "    exact_only=false",
-          "to": "    exact_only=true"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-agents-md-malformed"
-      ]
-    },
-    {
       "name": "408-cx-rules-preflight",
       "target": "bin/codex-setup.sh",
       "suite": "dev/doctor-tests.sh",
@@ -839,66 +733,6 @@
       ]
     },
     {
-      "name": "408-cx-end-guard",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "  end_any=\"$(grep -cF -- \"$END_MARKER\" \"$agents_md\")\"",
-          "to": "  end_any=\"$(grep -xcF -- \"$END_MARKER\" \"$agents_md\")\""
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-agents-md-malformed"
-      ]
-    },
-    {
-      "name": "484-cx-key-col0",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "/^[ \\t]*project_doc_fallback_filenames[ \\t]*=/",
-          "to": "/^project_doc_fallback_filenames[ \\t]*=/"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-refusals"
-      ]
-    },
-    {
-      "name": "484-cx-indent-ok",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "if ($0 ~ /^[ \\t]/) { indented++ }",
-          "to": "if (0) { indented++ }"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-refusals"
-      ]
-    },
-    {
-      "name": "484-cx-dup-off",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "[ \"$cfg_keys\" -gt 1 ]",
-          "to": "[ \"$cfg_keys\" -gt 99 ]"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-refusals"
-      ]
-    },
-    {
       "name": "484-cx-foreign-ok",
       "target": "bin/codex-setup.sh",
       "suite": "dev/doctor-tests.sh",
@@ -912,21 +746,6 @@
       "expect_fail": [
         "codex-setup-config-conflict",
         "codex-setup-config-refusals"
-      ]
-    },
-    {
-      "name": "484-cx-key-unanchored",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "/^[ \\t]*project_doc_fallback_filenames[ \\t]*=/",
-          "to": "/project_doc_fallback_filenames[ \\t]*=/"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-not-key"
       ]
     },
     {
@@ -945,21 +764,6 @@
       ]
     },
     {
-      "name": "490-cx-quoted-off",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "keyview ~ /^[ \\t]*\"project_doc_fallback_filenames\"[ \\t]*=/ {",
-          "to": "0 {"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-refusals"
-      ]
-    },
-    {
       "name": "490-cx-apostrophe-off",
       "target": "bin/codex-setup.sh",
       "suite": "dev/doctor-tests.sh",
@@ -972,51 +776,6 @@
       ],
       "expect_fail": [
         "codex-setup-config-refusals"
-      ]
-    },
-    {
-      "name": "490-cx-quoted-branch-off",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "[ \"$cfg_quoted\" -gt 0 ]",
-          "to": "[ \"$cfg_quoted\" -gt 99 ]"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-refusals"
-      ]
-    },
-    {
-      "name": "490-cx-quoted-unanchored",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "keyview ~ /^[ \\t]*\"project_doc_fallback_filenames\"",
-          "to": "keyview ~ /\"project_doc_fallback_filenames\""
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-config-not-key"
-      ]
-    },
-    {
-      "name": "410-provider-wrapper",
-      "target": "bin/check-harness.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-doctor-healthy",
-      "edits": [
-        {
-          "from": "if [ \"$provider\" = claude ]; then  # Claude Code-only checks (settings, toolchain, hooks toggle, policy activation) — skipped with --provider codex; closes at \"end of Claude Code-only checks\"",
-          "to": "if true; then  # Claude Code-only checks (settings, toolchain, hooks toggle, policy activation) — skipped with --provider codex; closes at \"end of Claude Code-only checks\""
-        }
-      ],
-      "expect_fail": [
-        "codex-doctor-healthy"
       ]
     },
     {
@@ -1104,21 +863,6 @@
         {
           "from": "              select(.enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |",
           "to": "              select(.enabled!=false and (.trustStatus!=\"trusted\")) |"
-        }
-      ],
-      "expect_fail": [
-        "codex-doctor-hooks-tolerated"
-      ]
-    },
-    {
-      "name": "410-trust-enabled",
-      "target": "bin/check-harness.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-doctor-hooks-",
-      "edits": [
-        {
-          "from": "              select(.enabled!=false and (.trustStatus!=\"trusted\" and .trustStatus!=\"managed\")) |",
-          "to": "              select(.trustStatus!=\"trusted\" and .trustStatus!=\"managed\") |"
         }
       ],
       "expect_fail": [
@@ -1345,21 +1089,6 @@
       ]
     },
     {
-      "name": "418-rules-any-strict",
-      "target": "bin/check-harness.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "protection-ruleset",
-      "edits": [
-        {
-          "from": "any($rsc[]; .parameters.strict_required_status_checks_policy == true)",
-          "to": "all($rsc[]; .parameters.strict_required_status_checks_policy == true)"
-        }
-      ],
-      "expect_fail": [
-        "protection-ruleset-multi"
-      ]
-    },
-    {
       "name": "418-rules-context-union",
       "target": "bin/check-harness.sh",
       "suite": "dev/doctor-tests.sh",
@@ -1403,21 +1132,6 @@
       ],
       "expect_fail": [
         "protection-ruleset-pr-only"
-      ]
-    },
-    {
-      "name": "418-rules-qualify-rsc",
-      "target": "bin/check-harness.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "protection-ruleset",
-      "edits": [
-        {
-          "from": "          .type == \"required_status_checks\" or\n",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "protection-ruleset-multi"
       ]
     },
     {
@@ -1528,21 +1242,6 @@
       ]
     },
     {
-      "name": "427-wrapper-kill-skipped",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-sched-",
-      "edits": [
-        {
-          "from": "kill -0 \"$codex_pid\" 2>/dev/null && kill -KILL \"$codex_pid\" 2>/dev/null  # on_wrapper_signal's own post-grace escalation",
-          "to": "kill -0 \"$codex_pid\" 2>/dev/null && :  # on_wrapper_signal's own post-grace escalation"
-        }
-      ],
-      "expect_fail": [
-        "codex-sched-wrapper-killed-noterm"
-      ]
-    },
-    {
       "name": "427-wrapper-grace-ignored",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -1603,21 +1302,6 @@
       ]
     },
     {
-      "name": "427-timeout-default",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-sched-",
-      "edits": [
-        {
-          "from": "timeout=\"${TBF_CODEX_RUN_TIMEOUT:-14400}\"",
-          "to": "timeout=\"${TBF_CODEX_RUN_TIMEOUT:-0}\""
-        }
-      ],
-      "expect_fail": [
-        "codex-sched-stop-local"
-      ]
-    },
-    {
       "name": "427-grace-default",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -1662,21 +1346,6 @@
       ],
       "expect_fail": [
         "codex-sched-wrapper-killed-forwards-term"
-      ]
-    },
-    {
-      "name": "427-stdin-inherited",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-sched-",
-      "edits": [
-        {
-          "from": "codex exec --cd \"$toplevel\" -s workspace-write --json -o \"$run_dir/last-message.md\" \"$PROMPT\" < /dev/null > \"$run_dir/events.jsonl\" 2> \"$run_dir/stderr.log\" &",
-          "to": "codex exec --cd \"$toplevel\" -s workspace-write --json -o \"$run_dir/last-message.md\" \"$PROMPT\" <&0 > \"$run_dir/events.jsonl\" 2> \"$run_dir/stderr.log\" &"
-        }
-      ],
-      "expect_fail": [
-        "codex-sched-completed"
       ]
     },
     {
@@ -1872,21 +1541,6 @@
       ]
     },
     {
-      "name": "444-slash-tmp-unchecked",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "for p in \"$slash_tmp\" \"${TMPDIR:-}\" \"$path_top\"; do",
-          "to": "for p in \"${TMPDIR:-}\" \"$path_top\"; do"
-        }
-      ],
-      "expect_fail": [
-        "codex-path-tmp"
-      ]
-    },
-    {
       "name": "444-tmpdir-unchecked",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -1899,21 +1553,6 @@
       ],
       "expect_fail": [
         "codex-path-tmp"
-      ]
-    },
-    {
-      "name": "444-toplevel-unchecked",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "for p in \"$slash_tmp\" \"${TMPDIR:-}\" \"$path_top\"; do",
-          "to": "for p in \"$slash_tmp\" \"${TMPDIR:-}\"; do"
-        }
-      ],
-      "expect_fail": [
-        "codex-path-repo"
       ]
     },
     {
@@ -1992,85 +1631,6 @@
       ],
       "expect_fail": [
         "codex-path-safe"
-      ]
-    },
-    {
-      "name": "444-symlink-kept",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "path_safe=\"${path_safe:+$path_safe:}$d\"",
-          "to": "path_safe=\"${path_safe:+$path_safe:}$e\""
-        }
-      ],
-      "expect_fail": [
-        "codex-path-safe"
-      ]
-    },
-    {
-      "name": "444-trailing-empty-dropped",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "    *) e=\"$path_rest\"; last=true ;;",
-          "to": "    *) e=\"$path_rest\"; last=true; [ -n \"$e\" ] || break ;;"
-        }
-      ],
-      "expect_fail": [
-        "codex-path-relative"
-      ]
-    },
-    {
-      "name": "444-tracking-skipped",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "  track_outcome \"$outcome\" \"$reason\"",
-          "to": "  [ \"$reason\" = unsafe-path ] || track_outcome \"$outcome\" \"$reason\""
-        }
-      ],
-      "expect_fail": [
-        "codex-path-relative"
-      ]
-    },
-    {
-      "name": "444-step-order",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "$path_unsafe && finish preflight-failed unsafe-path\n",
-          "to": ":\n"
-        },
-        {
-          "from": "[ \"$grace\" -gt 0 ] || finish preflight-failed bad-timeout\n",
-          "to": "[ \"$grace\" -gt 0 ] || finish preflight-failed bad-timeout\n$path_unsafe && finish preflight-failed unsafe-path\n"
-        }
-      ],
-      "expect_fail": [
-        "codex-path-relative"
-      ]
-    },
-    {
-      "name": "444-refusal-unquoted",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-path-",
-      "edits": [
-        {
-          "from": "refusing PATH entry %q:",
-          "to": "refusing PATH entry %s:"
-        }
-      ],
-      "expect_fail": [
-        "codex-path-relative"
       ]
     },
     {
@@ -2170,36 +1730,6 @@
       ]
     },
     {
-      "name": "443-comment-timeout-unmapped",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-ghbound-",
-      "edits": [
-        {
-          "from": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" --body \"$body\"\n      if $bounded_timed_out; then",
-          "to": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" --body \"$body\"\n      if false; then"
-        }
-      ],
-      "expect_fail": [
-        "codex-ghbound-track-comment"
-      ]
-    },
-    {
-      "name": "443-refail-comment-timeout-unmapped",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-ghbound-",
-      "edits": [
-        {
-          "from": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" \\\n          --body \"$(track_body \"$outcome\" \"$reason\" 'Failing again after a recovery.')\"\n      if $bounded_timed_out; then",
-          "to": "      bounded_run capture \"$run_dir/gh.out\" \"$gh_bin\" issue comment \"$st_issue\" \\\n          --body \"$(track_body \"$outcome\" \"$reason\" 'Failing again after a recovery.')\"\n      if false; then"
-        }
-      ],
-      "expect_fail": [
-        "codex-ghbound-track-comment"
-      ]
-    },
-    {
       "name": "443-wrapper-bounded-orphaned",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -2215,21 +1745,6 @@
       ]
     },
     {
-      "name": "443-gh-timeout-default",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-ghbound-",
-      "edits": [
-        {
-          "from": "gh_timeout_raw=\"${TBF_CODEX_GH_TIMEOUT:-120}\"",
-          "to": "gh_timeout_raw=\"${TBF_CODEX_GH_TIMEOUT:-0}\""
-        }
-      ],
-      "expect_fail": [
-        "codex-ghbound-env"
-      ]
-    },
-    {
       "name": "443-gh-timeout-fallback",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -2238,21 +1753,6 @@
         {
           "from": "gh_timeout=120\n",
           "to": "gh_timeout=\"$gh_timeout_raw\"\n"
-        }
-      ],
-      "expect_fail": [
-        "codex-ghbound-env"
-      ]
-    },
-    {
-      "name": "443-gh-timeout-leading-zero-accepted",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-ghbound-",
-      "edits": [
-        {
-          "from": "case \"$gh_timeout_raw\" in\n  0?*) finish preflight-failed bad-timeout ;;\nesac\ncase \"$gh_timeout_raw\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac",
-          "to": "case \"$gh_timeout_raw\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac"
         }
       ],
       "expect_fail": [
@@ -2351,21 +1851,6 @@
       ]
     },
     {
-      "name": "463-doctor-deadline-root-only",
-      "target": "dev/doctor-tests.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "deadline-kill-tree",
-      "edits": [
-        {
-          "from": "        *\" $ppid \"*) set=\"$set$pid \"; found=true ;;",
-          "to": "        *\" $ppid \"*) : ;;"
-        }
-      ],
-      "expect_fail": [
-        "deadline-kill-tree"
-      ]
-    },
-    {
       "name": "463-doctor-sched-deadline-leaks",
       "target": "dev/doctor-tests.sh",
       "suite": "dev/doctor-tests.sh",
@@ -2411,21 +1896,6 @@
       ]
     },
     {
-      "name": "460-run-timeout-leading-zero-accepted",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-sched-",
-      "edits": [
-        {
-          "from": "case \"$timeout\" in\n  0?*) finish preflight-failed bad-timeout ;;\nesac\ncase \"$timeout\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac",
-          "to": "case \"$timeout\" in\n  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;\nesac"
-        }
-      ],
-      "expect_fail": [
-        "codex-sched-timeout-invalid"
-      ]
-    },
-    {
       "name": "460-grace-leading-zero-accepted",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -2449,21 +1919,6 @@
         {
           "from": "    if [ -e \"$pre_dest\" ] && [ ! -f \"$pre_dest\" ]; then",
           "to": "    if false; then"
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-dest-not-a-file"
-      ]
-    },
-    {
-      "name": "485-cx-not-a-file-reason",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "echo \"drift=$rel reason=not-a-file\"",
-          "to": "echo \"drift=$rel reason=missing\""
         }
       ],
       "expect_fail": [
@@ -2534,24 +1989,6 @@
       ]
     },
     {
-      "name": "485-cx-wrote-early",
-      "target": "bin/codex-setup.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-setup-",
-      "edits": [
-        {
-          "from": "  mkdir -p \"$(dirname \"$dest\")\" || install_failed \"$rel\" \"mkdir -p failed\"",
-          "to": "  echo \"wrote=$rel\"\n  mkdir -p \"$(dirname \"$dest\")\" || install_failed \"$rel\" \"mkdir -p failed\""
-        }
-      ],
-      "expect_fail": [
-        "codex-setup-first-file-failure",
-        "codex-setup-mkdir-failure",
-        "codex-setup-mv-failure",
-        "codex-setup-mv-noop"
-      ]
-    },
-    {
       "name": "485-cx-fail-exit-zero",
       "target": "bin/codex-setup.sh",
       "suite": "dev/doctor-tests.sh",
@@ -2585,21 +2022,6 @@
       ]
     },
     {
-      "name": "496-preflight-stop-ignored",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-sched-unattended-stop",
-      "edits": [
-        {
-          "from": "if grep -qxF -- 'Unattended stop: preflight' \"$run_dir/last-message.md\"; then",
-          "to": "if false; then"
-        }
-      ],
-      "expect_fail": [
-        "codex-sched-unattended-stop"
-      ]
-    },
-    {
       "name": "496-preflight-stop-substring",
       "target": "bin/codex-scheduled-run.sh",
       "suite": "dev/doctor-tests.sh",
@@ -2608,21 +2030,6 @@
         {
           "from": "grep -qxF -- 'Unattended stop: preflight'",
           "to": "grep -qF -- 'Unattended stop: preflight'"
-        }
-      ],
-      "expect_fail": [
-        "codex-sched-unattended-stop"
-      ]
-    },
-    {
-      "name": "496-precedence-swapped",
-      "target": "bin/codex-scheduled-run.sh",
-      "suite": "dev/doctor-tests.sh",
-      "filter": "codex-sched-unattended-stop",
-      "edits": [
-        {
-          "from": "if grep -qxF -- 'Unattended stop: permission-denied' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-permission-denied\nfi\nif grep -qxF -- 'Unattended stop: preflight' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-preflight\nfi\n",
-          "to": "if grep -qxF -- 'Unattended stop: preflight' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-preflight\nfi\nif grep -qxF -- 'Unattended stop: permission-denied' \"$run_dir/last-message.md\"; then\n  finish failed unattended-stop-permission-denied\nfi\n"
         }
       ],
       "expect_fail": [

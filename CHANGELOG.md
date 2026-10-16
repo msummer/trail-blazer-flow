@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #583: the mutant registries keep one record for each group of mutants that share a suite, filter and recorded case
+  set (a gate-off record if there is one, else the fewest and shortest edits) and drop the rest with their `# mutant:`
+  comments, so the dropped mutations are no longer re-proved by a record of their own. No consumer step.
 - #584: `dev/hook-tests.sh`'s case descriptions no longer end with a list of the registry records that kill each case;
   `dev/mutants/hook-tests.json` alone records which registry mutant fails which case. No consumer step.
 - #543: push-guard's command-size cap drops to 256 KiB and agent-boundary gains one for the implementer and verifier,

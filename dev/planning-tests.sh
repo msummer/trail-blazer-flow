@@ -2220,7 +2220,7 @@ EOF
 # the (a)-(i) plan_marker_quoters or harness_marker_quoters mutants ever reaches this fixture —
 # see the MEASURED MUTANTS (#302) and (#321) blocks below the case table. escalation_records_skipped
 # has no mutant record of its own (#309 adds no new lettered clause set — see the REGISTRY MUTANTS
-# (#333) block's own note on why list_escalations() needs no 333-N6/333-N7/333-N9-shaped record),
+# (#333) block's own note on why list_escalations() needs no 333-N9-shaped record),
 # so only its counts-key-deletion mutant is pinned here.
 case_output_shape() {
   local dir; dir="$(mk_fixture output-shape)"
@@ -3835,7 +3835,7 @@ EOF
 # reaches a non-zero value here either — see the MEASURED MUTANTS (#321) block below the case
 # table. #309 adds a sixth has(...) assertion, for escalation_records_skipped — this member has no
 # mutant record of its own (see the REGISTRY MUTANTS (#333) block's own note on why
-# list_escalations() needs no 333-N6/333-N7/333-N9-shaped record), so
+# list_escalations() needs no 333-N9-shaped record), so
 # only its counts-key-deletion mutant is pinned here, the identical class as plan_marker_quoters'/
 # harness_marker_quoters' own mutant (j).
 case_impl_output_shape() {
@@ -7571,7 +7571,7 @@ EOF
 # placement rule — a forged escalation marker is annotated, never filtered out). This fixture has
 # no dedicated mutant of its own (its clauses are additive alongside, not letters within, the
 # #302/#321 blocks' own lettered mutants); it calls run_planning directly, so it is not reached by
-# any of the REGISTRY MUTANTS (#309) block's own P1-P6 records either (those target
+# any of the REGISTRY MUTANTS (#309) block's own records either (those target
 # bin/harness-status.sh via run_status).
 case_plan_escalation_record_not_feedback() {
   local dir; dir="$(mk_fixture plan-escalation-record-not-feedback)"
@@ -8825,7 +8825,7 @@ EOF
 # its DEFAULT stand-in (rc 0, `stop=false`) — the non-vacuity control for the stop check's own
 # healthy path: stop.state "false", counts.stop_routes 0, counts.stop_check_unavailable false, one
 # .stop-calls line (proving the check runs exactly once, never retried at this layer). See
-# dev/mutants/planning-tests.json's 297-h1/297-h2/297-h3/297-i/297-k/333-N4/333-N5/309-P4/309-P5/
+# dev/mutants/planning-tests.json's 297-h1/297-h2/297-h3/297-i/297-k/333-N4/333-N5/309-P5/
 # 353-S3 records.
 case_status_own_queries_healthy() {
   local dir; dir="$(mk_fixture status-own-queries-healthy)"
@@ -8942,7 +8942,7 @@ EOF
 # retry succeeds: retried true, unavailable false, EXACTLY one succeed-warn (expect_warn_count,
 # not mere presence), one sleep(30), two logged attempts; the impl-blocked and open-PR sites are
 # unaffected (one call each, real content, no warn). See dev/mutants/planning-tests.json's
-# 297-a/297-e/297-h1/297-i/297-l records.
+# 297-a/297-h1/297-i/297-l records.
 case_status_proposed_query_retry_succeeds() {
   local dir; dir="$(mk_fixture status-proposed-query-retry-succeeds)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -8981,7 +8981,7 @@ EOF
 # closed to an empty plans_to_review bucket, both flags true, one fail-closed warn (never the
 # succeed-warn), exactly one sleep, degraded_reasons is exactly ["status.proposed_query_unavailable"];
 # the impl-blocked and open-PR sites are unaffected. See dev/mutants/planning-tests.json's
-# 297-a/297-e/297-f/297-g/297-h1/297-i records.
+# 297-a/297-f/297-g/297-h1/297-i records.
 case_status_proposed_query_unavailable() {
   local dir; dir="$(mk_fixture status-proposed-query-unavailable)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9175,8 +9175,7 @@ EOF
 # always-retry on the proposed site is observationally identical to a genuine retry whenever the
 # site already fails on its first attempt, which this fixture's own reject-proposed-once marker
 # guarantees. This is also the only fixture whose stub `sleep` ever fails, so it is the only home
-# for the guarded-`|| true` mutant on the followups site (333-N3) and the escalations site
-# (309-P3), exactly as it already is for 297-d1/297-d2/297-d3 on the three #297 sites.
+# for the guarded-`|| true` mutant (297-d3).
 case_status_own_retry_sleep_failure_survives() {
   local dir; dir="$(mk_fixture status-own-retry-sleep-failure-survives)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9241,7 +9240,7 @@ EOF
 # degraded_reasons is the exact 4-entry array, planning half, then implementation half, then the
 # status half (in $sf's own key order —
 # proposed before blocked before prs; blocked's own flag is false so it never joins), 2 sleeps
-# (blocked needs none). See dev/mutants/planning-tests.json's 297-a/297-c/297-e/297-f/297-h1/
+# (blocked needs none). See dev/mutants/planning-tests.json's 297-a/297-c/297-f/297-h1/
 # 297-h2/297-h3/297-j records — the only Part 14 fixture whose own array assertion spans all
 # three halves at once, so it is what pins the $all concatenation ORDER (297-j).
 case_status_degraded_reasons_all_halves() {
@@ -9273,8 +9272,8 @@ EOF
 }
 
 # REGISTRY MUTANTS (#297) — recorded in dev/mutants/planning-tests.json; run
-# bash dev/mutant-driver.sh. All sixteen edit bin/harness-status.sh's own three (at the time)
-# gh call sites — plan-proposed, impl-blocked, and open-PR — and the degraded/degraded_reasons
+# bash dev/mutant-driver.sh. Each edits one of bin/harness-status.sh's own three (at the time)
+# gh call sites — plan-proposed, impl-blocked, or open-PR — or the degraded/degraded_reasons
 # computation those sites feed, reached only via run_status.
 #
 # mutant:297-a — collapses the proposed site's retry entirely (`if ! proposed=$(list_proposed);
@@ -9285,17 +9284,9 @@ EOF
 #
 # mutant:297-c — the identical collapse at the prs site.
 #
-# mutant:297-d1 — deletes the `|| true` guard from the proposed site's own
+# mutant:297-d3 — deletes the `|| true` guard from the prs site's own
 # `sleep "$RETRY_SLEEP"` only (the other sites' guards intact), so a failing stub `sleep` aborts
 # the script instead of being absorbed.
-#
-# mutant:297-d2 — the identical deletion at the blocked site's guard.
-#
-# mutant:297-d3 — the identical deletion at the prs site's guard.
-#
-# mutant:297-e — the proposed site sleeps but never actually retries (the inner
-# `if proposed=$(list_proposed); then ... else ... fi` collapsed to the unconditional `else`
-# body), so only one real attempt is ever made regardless of the first failure.
 #
 # mutant:297-f — drops the status half from `$all` (the
 # `+ [ $sf | to_entries[] | ... | "status." + .key ]` term removed entirely), so a status-site
@@ -9385,7 +9376,7 @@ EOF
 # followups_to_triage bucket now moves human_actions, since the query excludes triaged-held issues
 # at the source); the other three bucket counts stay 1 each; both new flags false; degraded false;
 # zero sleeps.
-# See dev/mutants/planning-tests.json's 285-l/297-k/333-N4/333-N5/333-N6/333-N7/333-N9 records;
+# See dev/mutants/planning-tests.json's 285-l/297-k/333-N4/333-N5/333-N9 records;
 # 333-N8 is the inverse (adding followups_to_triage BACK to the exclusion list).
 case_status_followups_bucket_populated() {
   local dir; dir="$(mk_fixture status-followups-bucket-populated)"
@@ -9431,7 +9422,7 @@ EOF
 # not mere presence), one sleep(30), two logged attempts; the other three sites are unaffected (one
 # call each, real content, no warn). Since #346 also pins the n==1 boundary: counts.human_actions is
 # 4 — plans_to_review(1) + prs_to_review(1) + blocked(1) + followups_to_triage(1) + stop_routes(0)
-# = 4. See dev/mutants/planning-tests.json's 285-l/297-k/333-N1/333-N2/333-N4/333-N5 records.
+# = 4. See dev/mutants/planning-tests.json's 285-l/297-k/333-N1/333-N4/333-N5 records.
 case_status_followups_query_retry_succeeds() {
   local dir; dir="$(mk_fixture status-followups-query-retry-succeeds)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9480,7 +9471,7 @@ EOF
 # prs_to_review(1) + blocked(1) + followups_to_triage(0) + stop_routes(0) = 3), one fail-closed
 # warn (never the succeed-warn), exactly one sleep, degraded_reasons is exactly
 # ["status.followups_query_unavailable"]; the other three sites are unaffected. See
-# dev/mutants/planning-tests.json's 297-f/297-g/297-k/333-N1/333-N2/333-N4/333-N5 records.
+# dev/mutants/planning-tests.json's 297-f/297-g/297-k/333-N1/333-N4/333-N5 records.
 case_status_followups_query_unavailable() {
   local dir; dir="$(mk_fixture status-followups-query-unavailable)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9530,8 +9521,8 @@ EOF
 # counts.human_actions is 1 (only the healthy blocked bucket contributes — plans_to_review and
 # prs_to_review are both fail-closed empty, and followups_to_triage's own query fails closed to an
 # empty bucket here too, so it contributes 0 even though #346 now includes it in the sum); 3 sleeps
-# (blocked needs none). See dev/mutants/planning-tests.json's 297-a/297-c/297-e/297-f/297-h1/
-# 297-h2/297-h3/333-N1/333-N2/333-N4 records.
+# (blocked needs none). See dev/mutants/planning-tests.json's 297-a/297-c/297-f/297-h1/
+# 297-h2/297-h3/333-N1/333-N4 records.
 case_status_followups_degraded_order() {
   local dir; dir="$(mk_fixture status-followups-degraded-order)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9567,23 +9558,15 @@ EOF
 }
 
 # REGISTRY MUTANTS (#333) — recorded in dev/mutants/planning-tests.json; run
-# bash dev/mutant-driver.sh. All eleven edit bin/harness-status.sh's fourth gh call site, held
+# bash dev/mutant-driver.sh. Each edits bin/harness-status.sh's fourth gh call site, held
 # follow-ups (list_followups()), or the human_actions sum those sites feed, reached only via
 # run_status. list_escalations() applies no jq filter or projection at all, so there is no
-# 333-N6/333-N7/333-N9-shaped mutant for the #309 escalations site below.
+# 333-N9-shaped mutant for the #309 escalations site below.
 #
 # mutant:333-N1 — collapses the followups site's retry entirely (`if !
 # followups_raw=$(list_followups); then ... fi` collapsed to the bare
 # `followups_raw=$(list_followups)`), so a failing first attempt aborts the whole script under
 # `set -euo pipefail` instead of retrying and failing closed.
-#
-# mutant:333-N2 — the followups site sleeps but never actually retries (the inner `if
-# followups_raw=$(list_followups); then ... else ... fi` collapsed to the unconditional `else`
-# body), so only one real attempt is ever made regardless of the first failure.
-#
-# mutant:333-N3 — deletes the `|| true` guard from the followups site's own
-# `sleep "$RETRY_SLEEP"` only, so a failing stub `sleep` aborts the script instead of being
-# absorbed.
 #
 # mutant:333-N4 — deletes `followups_query_unavailable: $fqu,` from the `$sf` object literal, so
 # `counts.followups_query_unavailable` reads `null` and a "status.followups_query_unavailable"
@@ -9592,22 +9575,12 @@ EOF
 # mutant:333-N5 — deletes `followups_query_retried: $fqr,` from the `$sf` object literal, so
 # `counts.followups_query_retried` reads `null`.
 #
-# mutant:333-N6 — changes the held-follow-up body filter's `startswith` to `contains`
-# (`select((.body // "") | contains("<!-- harness-follow-up: PR #"))`), so a follow-up marker
-# appearing anywhere in an issue's body — not just its opening line — qualifies.
-#
-# mutant:333-N7 — deletes the body `select(...)` clause entirely, so every issue the query returns
-# joins the bucket regardless of its body.
-#
 # mutant:333-N8 — adds `"followups_to_triage"` back to the `$excluded` list
 # (`["followups_to_triage"] as $excluded` instead of `[] as $excluded`), so the bucket is excluded
 # from human_actions instead of joining it.
 #
 # mutant:333-N9 — drops the `{number, title, url}` projection (keeping every original field,
 # including `body`) from the followups bucket's own entries.
-#
-# mutant:333-QT — deletes the ` -label:$TRIAGED_HELD_LABEL` token from list_followups()'s own
-# `--search` line, so a triaged-held issue is no longer excluded from the query.
 #
 # mutant:333-sum — replaces the generic minus-named-exclusion `human_actions` sum with the plain
 # three-term enumeration `(($woh.plans_to_review|length) + ($woh.prs_to_review|length) +
@@ -9687,7 +9660,7 @@ EOF
 # unavailable false, a populated bucket (one qualifying issue), one succeed-warn
 # (expect_warn_count, not mere presence), one sleep(30), two logged attempts; the other four sites
 # are unaffected (one call each, real content, no warn). See dev/mutants/planning-tests.json's
-# 309-P1/309-P2/309-P4/309-P5 records.
+# 309-P1/309-P5 records.
 case_status_escalations_query_retry_succeeds() {
   local dir; dir="$(mk_fixture status-escalations-query-retry-succeeds)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9734,7 +9707,7 @@ EOF
 # provide (this fixture writes no followups.json, so that member is empty and contributes 0 either
 # way), one fail-closed warn (never the succeed-warn), exactly one sleep, degraded_reasons is
 # exactly ["status.escalations_query_unavailable"]; the other four sites are unaffected. See
-# dev/mutants/planning-tests.json's 309-P1/309-P2/309-P4/309-P5 records.
+# dev/mutants/planning-tests.json's 309-P1/309-P5 records.
 case_status_escalations_query_unavailable() {
   local dir; dir="$(mk_fixture status-escalations-query-unavailable)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9779,25 +9752,13 @@ EOF
 }
 
 # REGISTRY MUTANTS (#309) — recorded in dev/mutants/planning-tests.json; run
-# bash dev/mutant-driver.sh. All six edit bin/harness-status.sh's fifth gh call site, escalations
+# bash dev/mutant-driver.sh. Each edits bin/harness-status.sh's fifth gh call site, escalations
 # (list_escalations()), reached only via run_status.
 #
 # mutant:309-P1 — collapses the escalations site's retry entirely (`if !
 # escalations=$(list_escalations); then ... fi` collapsed to the bare
 # `escalations=$(list_escalations)`), so a failing first attempt aborts the whole script under
 # `set -euo pipefail` instead of retrying and failing closed.
-#
-# mutant:309-P2 — the escalations site sleeps but never actually retries (the inner `if
-# escalations=$(list_escalations); then ... else ... fi` collapsed to the unconditional `else`
-# body), so only one real attempt is ever made regardless of the first failure.
-#
-# mutant:309-P3 — deletes the `|| true` guard from the escalations site's own
-# `sleep "$RETRY_SLEEP"` only, so a failing stub `sleep` aborts the script instead of being
-# absorbed.
-#
-# mutant:309-P4 — deletes `escalations_query_unavailable: $equ,` from the `$sf` object literal, so
-# `counts.escalations_query_unavailable` reads `null` and a "status.escalations_query_unavailable"
-# degraded_reasons entry can never be found.
 #
 # mutant:309-P5 — deletes `escalations_query_retried: $eqr,` from the `$sf` object literal, so
 # `counts.escalations_query_retried` reads `null`.
@@ -9871,7 +9832,7 @@ EOF
 # stop_routes[0] entry matches the printed route=/clear= pair VERBATIM (including their own
 # "route="/"clear=" prefixes — never re-derived), counts.stop_routes 1,
 # counts.stop_check_unavailable false (a determinate stop does not degrade), human_actions rises
-# by exactly 1 to 4. See dev/mutants/planning-tests.json's 353-S5/353-S6 records.
+# by exactly 1 to 4. See dev/mutants/planning-tests.json's 353-S9 record.
 case_status_stop_set_github() {
   local dir; dir="$(mk_fixture status-stop-set-github)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -9908,7 +9869,7 @@ EOF
 # degrade the verdict (stop.state stays "true", counts.stop_check_unavailable stays false — the
 # claim the earlier, impossible status-stop-set-both-routes shape used to carry). Pins: the local
 # carrier's verbatim route=local/clear=rm pair, stop.reason "gh-not-found", counts.stop_routes 1,
-# human_actions 4. See dev/mutants/planning-tests.json's 353-S6/353-S9/353-S11 records.
+# human_actions 4. See dev/mutants/planning-tests.json's 353-S9/353-S11 records.
 case_status_stop_set_local() {
   local dir; dir="$(mk_fixture status-stop-set-local)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -10036,7 +9997,7 @@ EOF
 
 # status-stop-not-on-path (AC3) — rc 127, empty stdout: the same published shape as
 # status-stop-usage-error, warn naming exit 127 instead (models the missing-script class). See
-# dev/mutants/planning-tests.json's 353-S10 record.
+# dev/mutants/planning-tests.json's 353-S1 record.
 case_status_stop_not_on_path() {
   local dir; dir="$(mk_fixture status-stop-not-on-path)"
   cat > "$dir/proposed.json" <<'EOF'
@@ -10229,7 +10190,7 @@ EOF
 }
 
 # REGISTRY MUTANTS (#353) — recorded in dev/mutants/planning-tests.json; run
-# bash dev/mutant-driver.sh. All twelve edit bin/harness-status.sh's sixth check site — one
+# bash dev/mutant-driver.sh. Each edits bin/harness-status.sh's sixth check site — one
 # bin/harness-stop.sh invocation, never a second gh query — or the stop_routes/human_actions
 # plumbing that site feeds, reached only via run_status.
 #
@@ -10251,14 +10212,6 @@ EOF
 # regardless of `$stop_rc`, trusting whichever token matches), so an untrusted exit whose stdout
 # happens to carry a determinate-looking token is trusted anyway.
 #
-# mutant:353-S5 — drops the `clear` field from each stop_routes entry (the
-# `clear: (if ... else null end)` member deleted from the route-building jq object, leaving only
-# `route: $lines[$i]`).
-#
-# mutant:353-S6 — pairs each `route=` line with the PREVIOUS line instead of the next (`$i + 1`/
-# `$lines[$i + 1]` changed to `$i - 1`/`$lines[$i - 1]` in the clear-lookup, with the bounds check
-# flipped from `< length` to `>= 0`).
-#
 # mutant:353-S7 — reverses the carrier order (the parsed `[ ... ] as $routes` array bound to a
 # `$routes_fwd` name instead, then `($routes_fwd | reverse) as $routes` added immediately after).
 #
@@ -10270,12 +10223,6 @@ EOF
 # mutant:353-S9 — adds `"stop_routes"` to the `$excluded` list (`[] as $excluded` ->
 # `["stop_routes"] as $excluded`), so a non-empty stop_routes bucket is excluded from
 # human_actions instead of joining it.
-#
-# mutant:353-S10 — wraps the stop check in a retry (mirrors the five gh sites' own
-# `if ! cmd; then sleep; cmd; fi` shape; #408: the site's own resolve_sibling wrapping carried
-# through both the guarded call and the retried one), so a permanently-failing harness-stop.sh
-# logs a second `.stop-calls` line even though harness-stop.sh's own header documents this site as
-# never retried at this layer.
 #
 # mutant:353-S11 — sets `stop_check_unavailable` true whenever a `reason=` line is present,
 # regardless of state (the assignment guard widened to also require, via an ANDed check on
@@ -10718,11 +10665,6 @@ EOF
 # mutant:312-f — drops the `or .event == "unlabeled"` disjunct from the events jq filter, so an
 # unlabeled plan-approved event alone can never withhold a candidate.
 #
-# mutant:312-g — deletes the time-window comparison entirely (the `if [[ "$evt" >
-# "$plan_created_at" || "$evt" = "$plan_created_at" ]]; then withheld=true; fi` block collapsed to
-# the unconditional `withheld=true`), so ANY matching event — even one that predates the plan —
-# withholds the candidate.
-#
 # mutant:312-h — drops the ` and .label.name == "plan-approved"` clause from the events jq
 # filter, so an unrelated label's labeled/unlabeled event (e.g. pr-open) is read into the window
 # and can wrongly withhold a candidate.
@@ -10733,9 +10675,6 @@ EOF
 # mutant:312-j — flips the events-read `if`'s polarity (`if ! events=$(gh api ...); then` loses
 # its `!`), so a REAL read failure takes the success/append branch (fail-OPEN) and a real success
 # takes the warn/skip branch instead.
-#
-# mutant:312-k — forces the carry-over entry's own `trusted_author` to the literal `true`, so an
-# untrusted issue author is reported as trusted in awaiting_approval.
 #
 # mutant:312-l — deletes `approval_events_unreadable: $aeu` from the final `.counts +=` object, so
 # `counts.approval_events_unreadable` reads `null` under --carry-over.
@@ -11309,7 +11248,7 @@ EOF
 
 # Two closed-after issues in one run. Issue 1's plan ALSO postdates its labeling, so it pins
 # closed-after-approval's precedence over plan-after-approval; together they pin that the counter
-# and the warn line are per issue (kills 375-f, 375-g, 375-i).
+# and the warn line are per issue (kills 375-f, 375-i).
 case_impl_reopened_precedence_two_issues() {
   local dir; dir="$(mk_fixture impl-reopened-precedence-two-issues)"
   cat > "$dir/ready.json" <<'EOF'
@@ -11375,9 +11314,6 @@ EOF
 # mutant:375-a — drops ` or .event == "closed"` from the events jq filter, so no closed event is
 # ever returned and no issue can reach the closed-after-approval branch.
 #
-# mutant:375-b — replaces the new condition with the literal `false`, so a closed event never
-# un-covers an approval regardless of timing.
-#
 # mutant:375-c — flips the tie-boundary comparison so a closed event whose created_at exactly
 # equals the newest labeling's no longer counts as closed-after.
 #
@@ -11389,9 +11325,6 @@ EOF
 #
 # mutant:375-f — assigns closed_after_approval=1 instead of incrementing it, so two closed-after
 # issues in one run are counted as one.
-#
-# mutant:375-g — also requires the plan not to postdate the labeling in the closed-after condition,
-# so plan-after-approval wins over closed-after-approval when both hold.
 #
 # mutant:375-h — lets a closed event alone skip the no-approval-event branch, so an issue with a
 # close but no plan-approved labeling is misreported instead of reaching no-approval-event.
@@ -13424,12 +13357,12 @@ cases=(
 # REGISTRY MIGRATION SCOPE (#359): the bin/harness-status.sh mutants once named (i)-(l) in the
 # former MEASURED MUTANTS (#284/#285) block, (a)-(l) in the former MEASURED MUTANTS (#297) block,
 # N1-N9/(QT)/(sum) in the former MEASURED MUTANTS (#333) block, P1-P6 in the former MEASURED
-# MUTANTS (#309) block, and S1-S12 in the former MEASURED MUTANTS (#353) block have all moved to
+# MUTANTS (#309) block, and S1-S12 in the former MEASURED MUTANTS (#353) block moved to
 # the machine-checked registry, dev/mutants/planning-tests.json (run bash dev/mutant-driver.sh), as
-# registry names 285-i..l, 297-a..l (incl. d1-d3/h1-h3), 333-N1..N9/QT/sum, 309-P1..P6, and
-# 353-S1..S12 respectively — those five blocks are now named REGISTRY MUTANTS (#284/#285),
-# REGISTRY MUTANTS (#297), REGISTRY MUTANTS (#333), REGISTRY MUTANTS (#309), and REGISTRY MUTANTS
-# (#353) above; see each one's own heading. Every other measured-mutants/mutation-proof block in
+# registry names prefixed 285-, 297-, 333-, 309- and 353- respectively, one record for each group
+# of mutants that share a suite, filter and recorded case set — those five blocks are now named
+# REGISTRY MUTANTS (#284/#285), REGISTRY MUTANTS (#297), REGISTRY MUTANTS (#333), REGISTRY MUTANTS
+# (#309), and REGISTRY MUTANTS (#353) above; see each one's own heading. Every other measured-mutants/mutation-proof block in
 # this file — including, but not limited to, the MEASURED MUTANTS (#284/#285) block's OWN (a)-(h)
 # letters (find-implementation-work.sh-specific, distinct from the migrated (i)-(l) letters, and
 # the reason that block's original name still exists, unmigrated), the MEASURED MUTANTS (#321) and

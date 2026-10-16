@@ -152,36 +152,6 @@
       ]
     },
     {
-      "name": "297-d1",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  proposed_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
-          "to": "  proposed_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
-        }
-      ],
-      "expect_fail": [
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
-      "name": "297-d2",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  blocked_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
-          "to": "  blocked_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
-        }
-      ],
-      "expect_fail": [
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
       "name": "297-d3",
       "target": "bin/harness-status.sh",
       "suite": "dev/planning-tests.sh",
@@ -194,26 +164,6 @@
       ],
       "expect_fail": [
         "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
-      "name": "297-e",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  if proposed=$(list_proposed); then\n    echo \"warn: plan-proposed query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list plan-proposed issues (gh issue list) \u2014 reporting an empty plans_to_review bucket this run (fail-closed)\" >&2\n    proposed_query_unavailable=true\n    proposed='[]'\n  fi",
-          "to": "    echo \"warn: could not list plan-proposed issues (gh issue list) \u2014 reporting an empty plans_to_review bucket this run (fail-closed)\" >&2\n    proposed_query_unavailable=true\n    proposed='[]'"
-        }
-      ],
-      "expect_fail": [
-        "status-degraded-reasons-all-halves",
-        "status-followups-degraded-order",
-        "status-own-retry-sleep-failure-survives",
-        "status-proposed-query-retry-succeeds",
-        "status-proposed-query-unavailable",
-        "status-stop-degraded-order"
       ]
     },
     {
@@ -421,39 +371,6 @@
       ]
     },
     {
-      "name": "333-N2",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  if followups_raw=$(list_followups); then\n    echo \"warn: held-follow-up query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list held follow-ups (gh issue list) \u2014 reporting an empty followups_to_triage bucket this run (fail-closed)\" >&2\n    followups_query_unavailable=true\n    followups_raw='[]'\n  fi",
-          "to": "    echo \"warn: could not list held follow-ups (gh issue list) \u2014 reporting an empty followups_to_triage bucket this run (fail-closed)\" >&2\n    followups_query_unavailable=true\n    followups_raw='[]'"
-        }
-      ],
-      "expect_fail": [
-        "status-followups-degraded-order",
-        "status-followups-query-retry-succeeds",
-        "status-followups-query-unavailable",
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
-      "name": "333-N3",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  followups_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
-          "to": "  followups_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
-        }
-      ],
-      "expect_fail": [
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
       "name": "333-N4",
       "target": "bin/harness-status.sh",
       "suite": "dev/planning-tests.sh",
@@ -493,36 +410,6 @@
       ]
     },
     {
-      "name": "333-N6",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "select((.body // \"\") | startswith(\"<!-- harness-follow-up: PR #\"))",
-          "to": "select((.body // \"\") | contains(\"<!-- harness-follow-up: PR #\"))"
-        }
-      ],
-      "expect_fail": [
-        "status-followups-bucket-populated"
-      ]
-    },
-    {
-      "name": "333-N7",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "[ .[] | select((.body // \"\") | startswith(\"<!-- harness-follow-up: PR #\")) | {number, title, url} ]",
-          "to": "[ .[] | {number, title, url} ]"
-        }
-      ],
-      "expect_fail": [
-        "status-followups-bucket-populated"
-      ]
-    },
-    {
       "name": "333-N8",
       "target": "bin/harness-status.sh",
       "suite": "dev/planning-tests.sh",
@@ -551,26 +438,6 @@
       ],
       "expect_fail": [
         "status-followups-bucket-populated"
-      ]
-    },
-    {
-      "name": "333-QT",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "label:no-plan -label:$TRIAGED_HELD_LABEL",
-          "to": "label:no-plan"
-        }
-      ],
-      "expect_fail": [
-        "status-followups-bucket-populated",
-        "status-followups-degraded-order",
-        "status-followups-query-retry-succeeds",
-        "status-followups-query-unavailable",
-        "status-own-queries-healthy",
-        "status-own-retry-sleep-failure-survives"
       ]
     },
     {
@@ -607,57 +474,6 @@
       "expect_fail": [
         "status-escalations-query-retry-succeeds",
         "status-escalations-query-unavailable",
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
-      "name": "309-P2",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  if escalations=$(list_escalations); then\n    echo \"warn: escalations query failed once \u2014 retried after 30s and succeeded (transient API blip absorbed)\" >&2\n  else\n    echo \"warn: could not list escalated issues (gh issue list) \u2014 reporting an empty escalations bucket this run (fail-closed)\" >&2\n    escalations_query_unavailable=true\n    escalations='[]'\n  fi",
-          "to": "    echo \"warn: could not list escalated issues (gh issue list) \u2014 reporting an empty escalations bucket this run (fail-closed)\" >&2\n    escalations_query_unavailable=true\n    escalations='[]'"
-        }
-      ],
-      "expect_fail": [
-        "status-escalations-query-retry-succeeds",
-        "status-escalations-query-unavailable",
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
-      "name": "309-P3",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "  escalations_query_retried=true\n  sleep \"$RETRY_SLEEP\" || true\n",
-          "to": "  escalations_query_retried=true\n  sleep \"$RETRY_SLEEP\"\n"
-        }
-      ],
-      "expect_fail": [
-        "status-own-retry-sleep-failure-survives"
-      ]
-    },
-    {
-      "name": "309-P4",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": " escalations_query_unavailable: $equ,",
-          "to": ""
-        }
-      ],
-      "expect_fail": [
-        "status-escalations-bucket-populated",
-        "status-escalations-query-retry-succeeds",
-        "status-escalations-query-unavailable",
-        "status-own-queries-healthy",
         "status-own-retry-sleep-failure-survives"
       ]
     },
@@ -779,40 +595,6 @@
       ]
     },
     {
-      "name": "353-S5",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "      | { route: $lines[$i],\n          clear: (if (($i + 1) < ($lines | length)) and ($lines[$i + 1] | startswith($cp))\n                  then $lines[$i + 1] else null end) }",
-          "to": "      | { route: $lines[$i] }"
-        }
-      ],
-      "expect_fail": [
-        "status-stop-set-both-routes",
-        "status-stop-set-github",
-        "status-stop-set-local"
-      ]
-    },
-    {
-      "name": "353-S6",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "          clear: (if (($i + 1) < ($lines | length)) and ($lines[$i + 1] | startswith($cp))\n                  then $lines[$i + 1] else null end) }",
-          "to": "          clear: (if (($i - 1) >= 0) and ($lines[$i - 1] | startswith($cp))\n                  then $lines[$i - 1] else null end) }"
-        }
-      ],
-      "expect_fail": [
-        "status-stop-set-both-routes",
-        "status-stop-set-github",
-        "status-stop-set-local"
-      ]
-    },
-    {
       "name": "353-S7",
       "target": "bin/harness-status.sh",
       "suite": "dev/planning-tests.sh",
@@ -863,30 +645,6 @@
         "status-stop-set-both-routes",
         "status-stop-set-github",
         "status-stop-set-local"
-      ]
-    },
-    {
-      "name": "353-S10",
-      "target": "bin/harness-status.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "status-",
-      "edits": [
-        {
-          "from": "stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\" || stop_rc=$?",
-          "to": "if ! stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\"; then sleep \"$RETRY_SLEEP\" || true; stop_out=\"$(\"$(resolve_sibling harness-stop.sh)\")\" || stop_rc=$?; fi"
-        }
-      ],
-      "expect_fail": [
-        "status-stop-degraded-order",
-        "status-stop-not-on-path",
-        "status-stop-set-both-routes",
-        "status-stop-set-github",
-        "status-stop-set-local",
-        "status-stop-true-no-carrier",
-        "status-stop-unavailable-with-carriers",
-        "status-stop-unknown",
-        "status-stop-unparseable-first-line",
-        "status-stop-usage-error"
       ]
     },
     {
@@ -1015,21 +773,6 @@
       ]
     },
     {
-      "name": "312-g",
-      "target": "bin/find-planning-work.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "carry-over",
-      "edits": [
-        {
-          "from": "if [[ \"$evt\" > \"$plan_created_at\" || \"$evt\" = \"$plan_created_at\" ]]; then",
-          "to": "if true; then"
-        }
-      ],
-      "expect_fail": [
-        "plan-carry-over-unrelated-events-ignored"
-      ]
-    },
-    {
       "name": "312-h",
       "target": "bin/find-planning-work.sh",
       "suite": "dev/planning-tests.sh",
@@ -1080,21 +823,6 @@
         "plan-carry-over-untrusted-author",
         "plan-carry-over-withdrawn-approval",
         "plan-carry-over-withheld-then-eligible"
-      ]
-    },
-    {
-      "name": "312-k",
-      "target": "bin/find-planning-work.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "carry-over",
-      "edits": [
-        {
-          "from": "trusted_author: ((($p.association // \"\") | ascii_upcase) as $assoc | ($ok | index($assoc)) != null),\n             plan_url: $pu,",
-          "to": "trusted_author: true,\n             plan_url: $pu,"
-        }
-      ],
-      "expect_fail": [
-        "plan-carry-over-untrusted-author"
       ]
     },
     {
@@ -1178,23 +906,6 @@
       ]
     },
     {
-      "name": "375-b",
-      "target": "bin/find-implementation-work.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "impl-reopened",
-      "edits": [
-        {
-          "from": "[ -n \"$closed_latest\" ] && ! [[ \"$approved_at\" > \"$closed_latest\" ]]",
-          "to": "false"
-        }
-      ],
-      "expect_fail": [
-        "impl-reopened-close-tie-not-covered",
-        "impl-reopened-closed-after-approval",
-        "impl-reopened-precedence-two-issues"
-      ]
-    },
-    {
       "name": "375-c",
       "target": "bin/find-implementation-work.sh",
       "suite": "dev/planning-tests.sh",
@@ -1253,21 +964,6 @@
         {
           "from": "closed_after_approval=$((closed_after_approval+1))",
           "to": "closed_after_approval=1"
-        }
-      ],
-      "expect_fail": [
-        "impl-reopened-precedence-two-issues"
-      ]
-    },
-    {
-      "name": "375-g",
-      "target": "bin/find-implementation-work.sh",
-      "suite": "dev/planning-tests.sh",
-      "filter": "impl-reopened",
-      "edits": [
-        {
-          "from": "if [ -n \"$closed_latest\" ] && ! [[ \"$approved_at\" > \"$closed_latest\" ]]; then",
-          "to": "if [ -n \"$closed_latest\" ] && ! [[ \"$approved_at\" > \"$closed_latest\" ]] && ! [[ \"$plan_created\" > \"$approved_at\" ]]; then"
         }
       ],
       "expect_fail": [
