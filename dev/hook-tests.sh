@@ -8937,8 +8937,8 @@ case_cdg_codexseg_noop_my_codex()     { run_claude_guard "$(mk_cdg_agent_path 'i
 #   belt-and-braces check's own guard with `false &&`, so it can never run at all, isolating every
 #   fixture whose deny depends on it running UNCONDITIONALLY/FIRST (both decoys, plus the two
 #   genuine-structure fixtures whose message text names the belt-and-braces reason specifically).
-# mutant:407-cdg-bash-parens (#407 kickback round 2, finding B) — drops `(`/`)` from the segment-
-#   break bracket expression, so a subshell or command substitution hides the command word.
+# mutant:407-cdg-bash-parens (#407 kickback round 2, finding B) — deletes the `(` and `)` substitutions
+#   from the segment split, so a subshell, a command substitution or a case arm hides the command word.
 # mutant:407-cdg-bash-gt-break (#407 kickback round 2, finding C) — disables the `>` word-break
 #   substitution entirely, so a glued `>` redirect hides the command word.
 # mutant:407-cdg-bash-indented-trigger-trim (#407 kickback round 2, finding C) — replaces
@@ -9029,8 +9029,22 @@ case_cdg_bash_deny_decoy_nbsp_header() {
     *) __ok=0; __why="${__why}stderr does not carry the specific belt-and-braces reason: '$cdg_err'\n" ;;
   esac
 }
-# #407 kickback round 2, finding B: "(" and ")" were already segment breaks -- pin it.
-case_cdg_bash_deny_no_inline_patch_subshell()      { run_claude_guard "$(mk_codex_shell 'implementer' '(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
+# #407 kickback round 2, finding B: "(" and ")" each break a segment -- pin it. A subshell exposes the shim
+# after its "(", and in a case arm only the ")" break exposes it (the arm's pattern would otherwise be its
+# command word), so the second command pins ")" on its own (#571).
+case_cdg_bash_deny_no_inline_patch_subshell() {
+  local c w0
+  for c in '(apply_patch < x.patch)' 'case x in x) apply_patch < x.patch;; esac'; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"with no inline patch text"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'with no inline patch text': '$cdg_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
+}
 case_cdg_bash_deny_no_inline_patch_cmdsubst()      { run_claude_guard "$(mk_codex_shell 'implementer' 'echo $(apply_patch < x.patch)')"; expect_cdg_deny_unparseable; }
 # #407 kickback round 2, finding C: the ">" word break, and has_exact_begin_patch_line's OWN full
 # trim (not is_apply_patch_word's command-word detection -- a backslash-newline splitting the shim
@@ -9566,6 +9580,73 @@ case_cdg_dl_noop_line_over_cap_main_session() {
 case_cdg_dl_noop_line_over_cap_other_agent() {
   run_claude_guard "$(cdg_dl_pad_cmd 5000 | mk_cdg_dl_bash Explore '')"
   expect_cdg_no_opinion
+}
+# cdgfast-tool-name-value (#571): fast path 2 admits an Edit or Write call by its tool_name value, the whole
+# JSON string with its quotes, not by either word appearing anywhere in the payload. Each of the three
+# ordinary Bash payloads holds one over-cap line and carries Edit or Write somewhere other than tool_name (an
+# acceptEdits permission_mode, a command, a cwd), so a pre-filter matching the bare substring would pass it on
+# to the line cap and deny it as too large to analyse. The controls are a compact-JSON Edit call and a
+# compact-JSON Write call, each in acceptEdits mode, the shape Claude Code sends: each must still be analysed
+# and denied, so an arm that matched only the spaced `"tool_name": "Write"` form fails here. Cases outside
+# every registry filter (cdgfast-, not cdg-bash-/cdg-dl-/cdg-split-): no recorded set can move.
+case_cdgfast_tool_name_value() {
+  local cap long p i=0 j=0 w0
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_BYTES from the hook\n"; return; fi
+  long="$(cdg_dl_fill $((cap + 100)))"
+  for p in \
+    "$(printf 'echo %s' "$long" | mk_cdg_dl_bash trail-blazer-flow:implementer acceptEdits)" \
+    "$(printf 'echo Write Edit %s' "$long" | mk_cdg_dl_bash trail-blazer-flow:verifier '')" \
+    "$(printf 'echo %s' "$long" | jq -Rs '{tool_name: "Bash", agent_type: "implementer", cwd: "/Users/x/VideoEditor", tool_input: {command: .}}')"; do
+    i=$((i + 1))
+    w0="$__why"; __why=""
+    run_claude_guard "$p"
+    expect_cdg_no_opinion
+    if [ -n "$__why" ]; then __why="${w0}[ordinary payload $i] ${__why}"; else __why="$w0"; fi
+  done
+  for p in \
+    "$(jq -cn '{tool_name: "Edit", agent_type: "trail-blazer-flow:implementer", permission_mode: "acceptEdits", tool_input: {file_path: "/repo/.claude/x"}}')" \
+    "$(jq -cn '{tool_name: "Write", agent_type: "trail-blazer-flow:implementer", permission_mode: "acceptEdits", tool_input: {file_path: "/repo/.claude/x", content: "x"}}')"; do
+    j=$((j + 1))
+    w0="$__why"; __why=""
+    run_claude_guard "$p"
+    expect_cdg_deny_claude
+    if [ -n "$__why" ]; then __why="${w0}[compact control $j] ${__why}"; else __why="$w0"; fi
+  done
+}
+# cdgfast-noop-long-lines (#571): a long benign multi-line command that the hook does walk (it names the shim
+# as an argument, so it passes fast path 2) finishes inside the production analysis budget. Forty lines just
+# under the per-line cap, each holding one `;`, are a per-line segment-split cost: a bracket-class
+# substitution, quadratic in the line's length under bash 3.2, exhausts the budget and denies the call as too
+# large to analyse; one single-character substitution per break character does not.
+case_cdgfast_noop_long_lines() {
+  local cap line cmd i
+  cap="$(cdg_dl_line_cap)"
+  if [ -z "$cap" ]; then __ok=0; __why="${__why}could not extract CDG_LINE_MAX_BYTES from the hook\n"; return; fi
+  line="echo $(cdg_dl_fill $((cap - 20))); echo b"
+  [ "${#line}" -lt "$cap" ] || { __ok=0; __why="${__why}fixture bug: line is ${#line} chars, wanted fewer than $cap\n"; return; }
+  cmd="rg -n apply_patch hooks/"
+  for i in $(seq 1 40); do cmd="${cmd}${LF}${line}"; done
+  cdg_deadline_override=15
+  run_claude_guard "$(printf '%s' "$cmd" | mk_cdg_dl_bash implementer '')"
+  expect_cdg_no_opinion
+}
+# cdgfast-deny-single-amp (#571): a single `&` (the background operator) is a segment break of its own, so the
+# shim after it is a command word. The `&&` chain is pinned elsewhere, and a split on two ampersands would
+# still catch that, so these two commands carry one `&` only: one with a space after it, one with the shim
+# glued to it. Kept outside every registry filter (cdgfast-), so no recorded mutant set moves.
+case_cdgfast_deny_single_amp() {
+  local c w0
+  for c in 'sleep 1 & apply_patch < x.patch' 'true &apply_patch < x.patch'; do
+    w0="$__why"; __why=""
+    run_claude_guard "$(mk_codex_shell 'implementer' "$c")"
+    expect_cdg_deny_unparseable
+    case "$cdg_err" in
+      *"with no inline patch text"*) ;;
+      *) __ok=0; __why="${__why}stderr missing 'with no inline patch text': '$cdg_err'\n" ;;
+    esac
+    if [ -n "$__why" ]; then __why="${w0}[$c] ${__why}"; else __why="$w0"; fi
+  done
 }
 # cdg_dl_big_patch_cmd PATH — a shell-issued inline heredoc patch of 100 ordinary-length lines
 # (well over any single-line cap in total, but each line short), adding the file PATH. Sized so the
@@ -14478,7 +14559,7 @@ cases=(
   "cdg-bash-deny-no-inline-patch-pipe|case_cdg_bash_deny_no_inline_patch_pipe|unparseable deny (#407 kickback finding 2/7): cat x.patch | apply_patch -- a pipe"
   "cdg-bash-deny-decoy-dollar-quote|case_cdg_bash_deny_decoy_dollar_quote|unparseable deny (#407 kickback finding 2, belt and braces): an ANSI-C-quoted (\$'...') decoy whose \\n sequences are literal backslash+n bytes, not real newlines -- the raw-text .claude mention still denies"
   "cdg-bash-deny-decoy-nbsp-header|case_cdg_bash_deny_decoy_nbsp_header|unparseable deny (#407 kickback round 2, finding A): a U+00A0-indented .claude header next to a genuinely benign one -- the belt-and-braces check catches it even though the structured parse alone would have missed it"
-  "cdg-bash-deny-no-inline-patch-subshell|case_cdg_bash_deny_no_inline_patch_subshell|unparseable deny (#407 kickback round 2, finding B): (apply_patch < x.patch) -- a subshell"
+  "cdg-bash-deny-no-inline-patch-subshell|case_cdg_bash_deny_no_inline_patch_subshell|unparseable deny (#407 kickback round 2, finding B): (apply_patch < x.patch) -- a subshell, and case x in x) apply_patch < x.patch;; esac -- a case arm, where only the \")\" break exposes the shim"
   "cdg-bash-deny-no-inline-patch-cmdsubst|case_cdg_bash_deny_no_inline_patch_cmdsubst|unparseable deny (#407 kickback round 2, finding B): echo \$(apply_patch < x.patch) -- a command substitution"
   "cdg-bash-deny-no-inline-patch-gt|case_cdg_bash_deny_no_inline_patch_gt|unparseable deny (#407 kickback round 2, finding C): apply_patch>out.txt -- the \">\" word break"
   "cdg-bash-deny-backslash-indented-begin-patch|case_cdg_bash_deny_backslash_indented_begin_patch|.claude deny (#407 kickback round 2, finding C): a backslash-newline-split apply_patch heredoc with an INDENTED exact Begin Patch/Add File line -- has_exact_begin_patch_line's own full trim is what denies here, not command-word detection (the split defeats that)"
@@ -14534,6 +14615,9 @@ cases=(
   "cdg-dl-noop-line-at-cap|case_cdg_dl_noop_line_at_cap|no opinion (#457): a benign one-line command of exactly the per-line size cap's length -- the cap is an upper bound, not a strict one"
   "cdg-dl-noop-line-over-cap-main-session|case_cdg_dl_noop_line_over_cap_main_session|no opinion (#457): an over-cap line with no agent_type -- fast path 1 excludes it before the cap (contract pin)"
   "cdg-dl-noop-line-over-cap-other-agent|case_cdg_dl_noop_line_over_cap_other_agent|no opinion (#457): an over-cap line from an Explore agent -- the role exit precedes the cap"
+  "cdgfast-tool-name-value|case_cdgfast_tool_name_value|no opinion (#571): three ordinary Bash payloads with an over-cap line and an Edit/Write word outside tool_name (acceptEdits mode, a command, a cwd) are never analysed; a compact-JSON Edit call and a compact-JSON Write call in acceptEdits mode are still denied"
+  "cdgfast-noop-long-lines|case_cdgfast_noop_long_lines|no opinion (#571): a benign multi-line command that names the shim only as an argument, with forty lines just under the per-line cap each holding a break character, finishes inside the production budget"
+  "cdgfast-deny-single-amp|case_cdgfast_deny_single_amp|unparseable deny (#571): sleep 1 & apply_patch < x.patch and true &apply_patch < x.patch -- a single ampersand is a segment break of its own, apart from the && chain"
   "cdg-dl-noop-big-patch|case_cdg_dl_noop_big_patch|no opinion (#457): a heredoc patch over 100 ordinary lines adding a benign path -- not capped by total size, finishes inside a 15s active deadline"
   "cdg-dl-deny-big-patch-claude|case_cdg_dl_deny_big_patch_claude|deny (#457): the same 100-line heredoc patch adding a path under .claude -- still denied, finishes inside a 15s active deadline"
   "cdg-dl-deny-patch-cr-line|case_cdg_dl_deny_patch_cr_line|deny (#457): a native apply_patch with a 400000-CR content line -- over the per-line size cap on the patch route, exact too-large line under a 15s active deadline, before any CR strip runs"
