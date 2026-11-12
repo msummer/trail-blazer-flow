@@ -58,11 +58,15 @@
 # precedent as bin/harness-version.sh) via its `--check` mode — is absent, declared (naming the
 # glob count), or malformed (naming the reason token); never FAILs, and never runs the classifier
 # against anything but this repo's own CLAUDE.md. The reserve and governance checks run only after
-# (#614) a contract-file-name check reads `git ls-files`: a root-level entry that is a case variant
-# of claude.md with none named exactly CLAUDE.md (which a case-insensitive filesystem opens as
-# CLAUDE.md anyway, while the merge floor and the reserve match read only the exact name) is a FAIL
-# naming the `git mv`, a failed listing is a WARN, and either skips both checks, so neither can
-# PASS; an untracked CLAUDE.md is not reported, with or without commits.
+# two shared contract-file checks, which run on --provider codex too: (#614, #617) a name check reads
+# `git ls-files` — a root-level entry that is a case variant of claude.md with none named exactly
+# CLAUDE.md (which a case-insensitive filesystem opens as CLAUDE.md anyway, while the merge floor and
+# the reserve match read only the exact name) is a FAIL naming the `git mv`, a failed listing a WARN;
+# and (#613), when HEAD's tree records CLAUDE.md as a symlink, a probe runs $script_dir/reserve-paths.sh
+# by a FIXED path in diff mode with HEAD's commit id as both arguments — a link its one-hop read rejects
+# is a FAIL naming the link text and the reason, an inconclusive probe a WARN. Any of these skips both
+# checks, so neither can PASS. An untracked CLAUDE.md is not reported, with or without commits; an
+# uncommitted or staged-only link, or a repo with no commits, is not probed.
 #
 # --provider codex (#410, default: claude) runs a different, additive check set after the shared
 # preamble above instead of the settings/toolchain/policy-activation checks below (all skipped on
@@ -375,6 +379,16 @@ else
 fi
 
 # --- CLAUDE.md ----------------------------------------------------------------
+# $cm_name_ok is true until a contract-file check below (the name check, #614/#617, or the HEAD
+# symlink probe, #613) finds the file unreadable by the merge floor and the implementer or cannot
+# tell; the Claude-only reserve and governance checks read it and skip when it is false, so neither
+# can PASS. $cm_skip_note says so in a contract-file line, on Claude only: the Codex doctor has
+# neither check.
+cm_name_ok=true
+cm_skip_note=""
+if [ "$provider" = claude ]; then
+  cm_skip_note="; this doctor skips its reserve and governance checks until it is fixed"
+fi
 if [ -f "$root/CLAUDE.md" ]; then
   if grep -qiE '(verif|## *test|test suite|typecheck|lint gate|npm run build|pytest|cargo test|go test|make test)' "$root/CLAUDE.md"; then
     ok "CLAUDE.md present with a verification-ish section (quality audit = harness-setup skill)"
@@ -392,8 +406,95 @@ if [ -f "$root/CLAUDE.md" ]; then
   else
     ok "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes"
   fi
+  # --- contract file name (#614, both providers #617) --- the merge floor's governance read
+  # (bin/governance-paths.sh) and the implementer's reserve match (bin/reserve-paths.sh) take the
+  # base tree's entry named exactly CLAUDE.md and nothing else. On a case-insensitive filesystem
+  # (macOS, Windows) a repo that tracks claude.md still has $root/CLAUDE.md openable, so a check
+  # that reads the working-tree file would PASS while those reads find no section. This reads the
+  # index (`git ls-files`, plain, not -z: git quotes a name holding a control character, so an
+  # embedded newline cannot forge a CLAUDE.md line, and a case variant of claude.md never needs
+  # quoting) and FAILs when a root-level entry matches claude.md ignoring ASCII case (LC_ALL=C) but
+  # none is named exactly CLAUDE.md, naming the rename. The printed name is a whole-line match, so
+  # it can only be a case variant of claude.md. A failed `git ls-files` is a WARN: the doctor
+  # cannot confirm the name. Either sets $cm_name_ok false. An untracked CLAUDE.md is not
+  # reported, with or without commits: the index is what is read, and an approved CLAUDE.md is
+  # left uncommitted for the human during setup. Nothing read from the repo is executed or
+  # expanded.
+  if cm_ls="$(git ls-files 2>/dev/null)"; then
+    cm_tracked="$(LC_ALL=C grep -ixF -- 'claude.md' <<<"$cm_ls")"
+    if [ -n "$cm_tracked" ] && ! grep -qxF -- 'CLAUDE.md' <<<"$cm_tracked"; then
+      cm_name_ok=false
+      IFS= read -r cm_variant <<<"$cm_tracked"
+      bad "contract file: git tracks it as '$cm_variant', not CLAUDE.md — the merge floor and the implementer read only an entry named exactly CLAUDE.md, so neither section is ever applied even though a case-insensitive filesystem opens this file$cm_skip_note: git mv $cm_variant CLAUDE.md, then commit"
+    fi
+  else
+    cm_name_ok=false
+    wrn "contract file: could not check that git tracks it as exactly CLAUDE.md (git ls-files failed)$cm_skip_note"
+  fi
 else
   bad "no CLAUDE.md — the harness contract requires one (conventions + verification commands); the harness-setup skill can draft it"
+fi
+
+# --- contract file symlink (#613) -----------------------------------------------
+# The merge floor (bin/governance-paths.sh) and the implementer (bin/reserve-paths.sh) read
+# CLAUDE.md from a git tree and follow a symlink only one hop, to a plain relative path naming a
+# file in its exact case; the file-based checks here read through the filesystem and would follow
+# any link. So when HEAD's own tree records CLAUDE.md as a symlink (mode 120000), this runs
+# bin/reserve-paths.sh by a FIXED path in its diff mode with HEAD as both base and head, which does
+# that one-hop read and nothing else (an empty diff), and classifies the result: a clean verdict
+# (none/absent) or a malformed-section error (the link was followed; the section is reported by
+# the reserve check) is a PASS; a symlink rejection is a FAIL carrying the script's reason;
+# anything else, including a missing or non-executable script, is a WARN. A FAIL or WARN sets
+# $cm_name_ok false. The only argument is a git-verified commit id; the script's output is only
+# captured, tested and echoed, never executed or expanded. An uncommitted or staged-only link,
+# or a repo with no commits, is not probed.
+if $cm_name_ok && cm_head="$(git rev-parse -q --verify 'HEAD^{commit}' 2>/dev/null)"; then
+  cm_probe_ran=false
+  if cm_tree="$(git cat-file -p "$cm_head^{tree}" 2>/dev/null)"; then
+    cm_tab="$(printf '\t')"
+    while IFS= read -r cm_tl; do
+      case "$cm_tl" in
+        "120000 blob "*"${cm_tab}CLAUDE.md") cm_probe_ran=true ;;
+      esac
+    done <<<"$cm_tree"
+  else
+    cm_name_ok=false
+    wrn "contract file: could not check that the harness can follow a CLAUDE.md symlink (reading HEAD's tree failed)$cm_skip_note"
+  fi
+  if $cm_probe_ran; then
+    cm_res="$script_dir/reserve-paths.sh"
+    cm_probe=""
+    cm_probe_rc=127
+    if [ -x "$cm_res" ]; then
+      cm_probe="$("$cm_res" "$cm_head" "$cm_head" 2>&1)"
+      cm_probe_rc=$?
+    fi
+    cm_first="$(printf '%s\n' "$cm_probe" | head -1)"
+    cm_last="$(printf '%s\n' "$cm_probe" | tail -1)"
+    cm_link_ok="contract file: CLAUDE.md is a symlink the merge floor and the implementer follow one hop (checked at HEAD)"
+    if [ "$cm_probe_rc" -eq 0 ] && { [ "$cm_probe" = "verdict=none" ] || [ "$cm_probe" = "verdict=absent" ]; }; then
+      ok "$cm_link_ok"
+    elif [ "$cm_probe_rc" -eq 1 ] && [ "$cm_last" = "verdict=error" ]; then
+      case "$cm_first" in
+        "CLAUDE.md at "*" is a symlink to '"*)
+          cm_rest="${cm_first#CLAUDE.md at }"
+          cm_rest="${cm_rest#* }"
+          cm_name_ok=false
+          bad "contract file: CLAUDE.md $cm_rest (at HEAD) — the implementer (and, under merge autonomy, the merge floor) read the contract from git's tree and follow a link only one hop, to a plain relative path naming a file in its exact case, so every implementation stops before verification$cm_skip_note: point the link straight at the file, then commit"
+          ;;
+        "malformed 'Autonomy reserve' section at "*)
+          ok "$cm_link_ok"
+          ;;
+        *)
+          cm_name_ok=false
+          wrn "contract file: could not check that the harness can follow the CLAUDE.md symlink$cm_skip_note"
+          ;;
+      esac
+    else
+      cm_name_ok=false
+      wrn "contract file: could not check that the harness can follow the CLAUDE.md symlink$cm_skip_note"
+    fi
+  fi
 fi
 
 # --- LESSONS.md (auto-seed) ----------------------------------------------------
@@ -1354,40 +1455,12 @@ EOF
     fi
   fi
 
-  # --- contract file name (#614) --- the merge floor's governance read (bin/governance-paths.sh)
-  # and the implementer's reserve match (bin/reserve-paths.sh) take the base tree's entry named
-  # exactly CLAUDE.md and nothing else. On a case-insensitive filesystem (macOS, Windows) a repo
-  # that tracks claude.md still has $root/CLAUDE.md openable, so the two checks below, which read
-  # the working-tree file, would PASS while those reads find no section. This reads the index
-  # (`git ls-files`, plain, not -z: git quotes a name holding a control character, so an embedded
-  # newline cannot forge a CLAUDE.md line, and a case variant of claude.md never needs quoting) and
-  # FAILs when a root-level entry matches claude.md ignoring ASCII case (LC_ALL=C) but none is named
-  # exactly CLAUDE.md, naming the rename. The printed name is a whole-line match, so it can only be
-  # a case variant of claude.md. $cm_name_ok then gates the reserve and governance checks below: a
-  # FAIL or a failed listing skips both, so neither can PASS. A failed `git ls-files` is a WARN: the
-  # doctor cannot confirm the name, so it PASSes nothing that depends on it. An untracked CLAUDE.md is
-  # not reported, with or without commits: the index is what is read, and an approved
-  # CLAUDE.md is left uncommitted for the human during setup. Nothing read from the repo is
-  # executed or expanded.
-  cm_name_ok=true
-  if cm_ls="$(git ls-files 2>/dev/null)"; then
-    cm_tracked="$(LC_ALL=C grep -ixF -- 'claude.md' <<<"$cm_ls")"
-    if [ -n "$cm_tracked" ] && ! grep -qxF -- 'CLAUDE.md' <<<"$cm_tracked"; then
-      cm_name_ok=false
-      IFS= read -r cm_variant <<<"$cm_tracked"
-      bad "contract file: git tracks it as '$cm_variant', not CLAUDE.md — the merge floor and the implementer read only an entry named exactly CLAUDE.md, so neither section is ever applied even though a case-insensitive filesystem opens this file; this doctor skips its reserve and governance checks until the file is renamed: git mv $cm_variant CLAUDE.md, then commit"
-    fi
-  else
-    cm_name_ok=false
-    wrn "contract file: could not check that git tracks it as exactly CLAUDE.md (git ls-files failed) — the reserve and governance checks are skipped"
-  fi
-
   # --- autonomy reserve (#552) --- validates the optional "Autonomy reserve" section (README
   # item 7) that the implementer orchestrator hands to bin/reserve-paths.sh before every verifier
   # dispatch, and, only while plan auto-approval is active (a "Plan auto-approval policy" section,
   # or `mode: autonomous`), reports the repo's tracked schema paths that no reserve glob covers
   # (an advice-only WARN) or that a `not reserved:` line leaves out on purpose (a PASS). Runs only
-  # when the contract-file check above confirmed the name, and only when the section exists or
+  # when the shared contract-file checks (name and symlink, #614/#613) confirmed the file, and only when the section exists or
   # auto-approval is active, by a FIXED path,
   # $script_dir/reserve-paths.sh --check "$root/CLAUDE.md" — same precedent as the governance
   # check below — never a path derived from repo content. Missing, non-executable, a non-zero
@@ -1452,8 +1525,8 @@ EOF
   # git object). Missing, non-executable, a non-zero exit, or any stdout shape but the three the
   # script documents (absent / declared <n> / malformed <token>) is the same "could not validate"
   # WARN, never a FAIL — this doctor never blocks a run on this, matching the ratchet and
-  # post-merge-verification declaration checks above. Runs only when the contract-file check
-  # (#614) above confirmed the name; the first arm below is that skip, kept as an arm of the same
+  # post-merge-verification declaration checks above. Runs only when the shared contract-file
+  # checks (#614, #613) above confirmed the file; the first arm below is that skip, kept as an arm of the same
   # chain so the arms after it keep their indentation.
   gov_script="$script_dir/governance-paths.sh"
   gov_out=""

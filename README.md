@@ -709,11 +709,10 @@ rewrite any entry it names as malformed; until then, every implementation stops 
 verification. If `CLAUDE.md` declares Governance paths, run `check-harness.sh` and fix a WARN that
 the section is malformed (bracket), meaning a `[` or `]` outside a route-parameter group or a
 backslash in a bracketed entry; until then, under merge autonomy every PR is held. If `CLAUDE.md`
-is a symlink, check by hand that its target is a file inside the repo, written as a relative path
-with no `..` or inner `.` segment, through no symlinked directory, in the file's exact case, and not
-itself a symlink; the doctor does not check it, and an unusable link holds every PR and stops every
-implementation before verification. If `check-harness.sh` FAILs `contract file: git tracks it as
-'<name>'`, run the `git mv <name> CLAUDE.md` it names and commit.
+is a symlink, the doctor FAILs a committed link the one-hop read cannot follow, naming the
+link and the reason; point it straight at a file in the repo and commit. If `check-harness.sh`
+FAILs `contract file: git tracks it as '<name>'`, run the `git mv <name> CLAUDE.md` it names and
+commit.
 
 </details>
 
