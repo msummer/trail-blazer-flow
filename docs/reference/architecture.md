@@ -26,6 +26,7 @@
 │   ├── issue-implementer/references/worktree-mode.md  # worktree-parallel procedure (read on demand)
 │   ├── issue-implementer/references/wording-fast-path.md  # verifier wording-only fix round (read on demand)
 │   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
+│   ├── issue-cycle/references/full-auto.md  # one-run full-auto procedure (read on demand)
 │   ├── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
 │   └── tracker/SKILL.md          # optional live tracker: creates the artifact page and syncs it; orchestrating session only (#622)
 ├── bin/                          # on the Bash PATH when the plugin is enabled, on Claude Code — never on Codex (#408, ADR 0002 P5)

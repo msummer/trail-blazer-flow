@@ -174,7 +174,9 @@ Run:
 find-planning-work.sh
 ```
 
-Under "Autonomy mode" `mode: autonomous` (README contract item 9), run
+Under "Autonomy mode" `mode: autonomous` (README contract item 9) — or, for in-scope issues only,
+an `issue-cycle` full-auto grant, which counts as `mode: autonomous` here and in step 6b
+(`issue-cycle`'s `references/full-auto.md` "Authority") — run
 `find-planning-work.sh --carry-over` instead (#312): it adds an `awaiting_approval` array (rule in the script's header),
 whose items also carry `plan_url` and `plan_created_at` and are consumed only by step 6b. Report a
 non-zero `counts.approval_events_unreadable` prominently.
@@ -349,7 +351,8 @@ against each other and against any other pending plans (`plan-proposed` / `plan-
 issues). If two plans touch the same files, say so in the summary: the implementer cuts every
 branch from the default branch, so overlapping changes will conflict at PR time, and the human
 may want to approve and merge them one at a time. Overlap also disqualifies a plan from
-auto-approval (step 6) — sequencing overlapping work is a human call.
+auto-approval (step 6) — sequencing overlapping work is a human call (a full-auto grant narrows
+this; see 6b's overlap clause).
 
 ### 5. Propose answers and revise (orchestrator judgment step)
 
@@ -401,10 +404,11 @@ record" section, or no issue this run carries the declared label, there is nothi
 
 **6b. Auto-approval.** Read the repo's `CLAUDE.md` for a section titled **"Plan auto-approval
 policy"**. If there is no such section, and no "Autonomy mode" section declares `mode: autonomous`
-(README contract item 9), skip the rest of this step — every approval is the human's. Under
-`mode: autonomous`, a missing policy section is read as present with no policy conditions beyond
-the hard floor below — the hard floor alone decides. Either way, evaluate each plan you posted or
-revised **this run** — and, under `mode: autonomous` only, each 6b carry-over candidate (see
+(README contract item 9), and no full-auto grant covers the issue, skip the rest of this step —
+every approval is the human's. Under `mode: autonomous` or such a grant, a missing policy section
+is read as present with no policy conditions beyond the hard floor below — the hard floor alone
+decides. Either way, evaluate each plan you posted or
+revised **this run** — and, under `mode: autonomous` or the grant only, each 6b carry-over candidate (see
 below) — against BOTH of the following. The policy can loosen nothing in the hard
 floor; it can only add conditions.
 
@@ -423,7 +427,8 @@ floor; it can only add conditions.
   quoted bullet settles is not covered either — the grant is void by the repo's own rule at that
   point — and ambiguity resolves the same way it does under 6b's policy conditions: the answer is
   no. This skill only ever reads the grant label; it never applies, restores, or re-applies it;
-- the plan is not stale (step 4) and does not overlap another pending plan's Affected areas;
+- the plan is not stale (step 4) and does not overlap another pending plan's Affected areas (under
+  a full-auto grant, only one outside its scope — `references/full-auto.md` "Authority");
 - the plan's "Data / schema impact" is "None" **unless** the policy explicitly opts schema work
   in;
 - the plan's "Risks & considerations" flags nothing security-sensitive (auth, permissions,
@@ -437,12 +442,12 @@ floor; it can only add conditions.
   whose author association could not be read this run (`counts.author_association_unavailable:
   true`), is planned but never auto-approved.
 
-**Carry-over (#312, `mode: autonomous` only)** — each `awaiting_approval` item this run did not
+**Carry-over (#312, `mode: autonomous` or a full-auto grant only)** — each `awaiting_approval` item this run did not
 post or revise a plan for. Fetch it fresh (`gh issue view <n> --json number,title,url,labels,comments`)
 and read the plan from the comment whose `url` equals `plan_url`; skip it, with the reason in
 step 7, if that comment is gone or the fetched `labels` already carry `plan-approved`. Otherwise
 judge every hard-floor clause above against that plan now — staleness via step 4, overlap against
-every other pending plan, labels from this fetch, `trusted_author` from the item; an earlier-run
+every other pending plan (as the overlap clause reads under a grant), labels from this fetch, `trusted_author` from the item; an earlier-run
 `RESOLVED (orchestrator-proposed):` decision counts exactly like a this-run one. Pass: approve and
 audit below, binding to `plan_url`, and say it is a carry-over. Fail: write nothing to GitHub and
 report the failing clause in step 7; the next run re-evaluates it.
@@ -466,7 +471,9 @@ directive, and the marker is what keeps it out of `find-implementation-work.sh`'
 its "remove `plan-approved`, add `no-auto-approve`" veto instructions would otherwise reach the
 implementer as a binding `RESOLVED:` decision about the issue's own labels. It must state: that
 this was an auto-approval under the CLAUDE.md policy (or, with no such section declared, under
-"Autonomy mode"'s implied policy); which policy conditions it satisfied (one
+"Autonomy mode"'s implied policy, or under a full-auto grant — name it as
+`full-auto <scope as typed>`, the run id and the date, and name each in-scope plan it overlaps);
+which policy conditions it satisfied (one
 line, or "none declared — hard floor only" under the implied policy); the URL of the plan comment this approval binds to (#174) — the label is
 always added AFTER the plan it binds to was posted (whether that posting happened this run or,
 for a carry-over approval, an earlier one), so an auto-approved plan is always covered by its own
@@ -582,8 +589,8 @@ harness-lock.sh release <run-id>
 - **The subagent writes the plan; you do all `gh` calls.** The subagent is read-only and cannot
   post to GitHub.
 - **`plan-approved` is set by the human — or by step 6's policy path, never otherwise.** No
-  CLAUDE.md policy section and no "Autonomy mode" `mode: autonomous` ⇒ no auto-approval, full
-  stop. The hard floor is not negotiable, and
+  CLAUDE.md policy section, no "Autonomy mode" `mode: autonomous` and no full-auto grant ⇒ no
+  auto-approval, full stop. The hard floor is not negotiable, and
   orchestrator-proposed answers to BLOCKING questions keep a plan manual unless step 6's
   granted-issue exception applies.
 - **If a subagent's plan is dominated by open questions** (i.e. it couldn't form a real plan),

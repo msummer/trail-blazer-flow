@@ -24,7 +24,8 @@ pattern-matched deny entries below, by the third plugin-shipped `PreToolUse` hoo
 deny-list (no merge by default, no force-push, no `reset --hard`,
 no `rm -rf`), independent re-verification + staged-file reconciliation before every commit, and
 **human review of every PR before merge unless the repo has double-opted-in to merge autonomy**
-(CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract"). The deny-list is best-effort pattern matching; branch protection +
+(CLAUDE.md policy + lifted deny — see "The CLAUDE.md contract" — or a human's per-run full-auto
+grant + lifted deny, see workflow.md's "Full auto"). The deny-list is best-effort pattern matching; branch protection +
 PR review are the real backstops, and — because two of the seven bare denies name the default
 branch literally — `check-harness.sh` reports per-repo whether those two entries (and their `-C`
 mirrors) actually cover this repo's default branch. The pre-merge guarantee is "nothing pushed, no PR exists" —
@@ -989,7 +990,8 @@ altogether all leave the hook silent — the same session-wide allow list this c
 describe in full, now narrowed to exactly those cases). The staged-file reconciliation and branch
 isolation remain the backstop for whatever this mechanical boundary doesn't reach. Second, plan auto-approval and
 merge autonomy (each opt-in via `CLAUDE.md` — see "The CLAUDE.md contract" items 4–5, or item 9's
-"Autonomy mode" section, which turns both on together as one combination)
+"Autonomy mode" section, which turns both on together as one combination — or, for one run and
+one named scope, a human's typed full-auto grant, see workflow.md's "Full auto")
 deliberately trade human gates for throughput on low-risk work. Their hard floors are not
 configurable by the policy section — the one exception is itself part of the floor's fixed
 definition, not something a policy can widen: on an issue the human granted under the repo's
@@ -1209,7 +1211,8 @@ issue=<n> outcome=<o> [retries=<k>] [deploy=<d>] [harness=<v>] [pr=<n>] [branch=
 one per recorded `<!-- harness-status: … -->` line (merge lines included) plus four exit records
 from `issue-implementer`'s "Run journal" bullet — `pr-opened`, `impl-blocked`, `escalated` and
 `skipped` (`reason=foreign-worktree`, a stale worktree that is not ours holding a branch the batch
-needs; the run continues). A run that stops early adds one run-level record,
+needs; the run continues). A full-auto run (#623) adds `stage=planner outcome=auto-approved
+reason=full-auto` per approval and `reason=full-auto` on each merge record. A run that stops early adds one run-level record,
 `harness-lock.sh journal <run-id> stage=run outcome=stopped reason=<r>` (#533), with no `issue`
 key and no other optional key; `<r>` is one of the closed vocabulary `RUN_STOP_REASONS` (`--help`
 lists it): `red-baseline`, `dirty-tree`, `stop-switch` (the stop switch read `stop=true`),

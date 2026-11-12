@@ -19,7 +19,7 @@ fresh verdict's after a CI-fix round; `gh pr comment` is deliberately **not** gr
 verifier's verdict is archived on the *issue* instead (`Bash(gh issue comment:*)`, already
 granted), which is also where the merge pass reads it back with one `gh issue view` call.
 `Bash(gh pr update-branch:*)` is used only by the serial merge train's update-branch fallback
-(item 9) — it merges the default branch into a held PR's own branch, never `--rebase`, and never
+(item 9; a full-auto run reuses it) — it merges the default branch into a held PR's own branch, never `--rebase`, and never
 touches the default branch itself. The same
 file also carries the non-permission keys a clone needs to bootstrap
 the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and

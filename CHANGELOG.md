@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #623: `issue-cycle` "full auto": one human-invoked run plans, builds in parallel worktrees and
+  merges a named milestone or issue list under the existing floors (`references/full-auto.md`);
+  never unattended; Codex: scope only.
 - #630: `project-kickoff` records the backlog's cross-issue dependencies as native GitHub issue
   dependencies (an add-blocked-by pass after filing; fails soft on an older `gh`), so the
   tracker shows them.

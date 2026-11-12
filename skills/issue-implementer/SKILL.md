@@ -54,7 +54,8 @@ the run.
 - **Never merge in this skill** and **never push to the default branch**. One issue → one
   `claude/<n>-<slug>` branch → one PR. Merging belongs to the human — or, on Claude Code only,
   where CLAUDE.md defines a merge autonomy policy (declared, or implied by "Autonomy mode" —
-  README contract item 9) and the human has lifted the default `gh pr merge` deny, to the
+  README contract item 9) or a human's `issue-cycle` full-auto grant covers the PR, and the human
+  has lifted the default `gh pr merge` deny, to the
   `issue-cycle` skill's merge pass, the sole place any harness merge authority exists. On Codex
   the merge pass never runs — see the Codex pointer above.
 - **The subagent writes code; you do every git and `gh` command.** This holds after a verifier
@@ -605,7 +606,8 @@ e. **Dispatch the `verifier` subagent** (Claude Code: Task tool; Codex: `spawn_a
      finding is `wording`, run `references/wording-fast-path.md`'s one budget-free round instead
      (once per issue per run). **The kickback budget — 2 by
      default, or CLAUDE.md's "Autonomy mode" `kickback-budget:` value (README contract item 9)
-     when that section declares `mode: autonomous`, bounded 0-3 — is never exceeded** (budget + 1
+     when that section declares `mode: autonomous`, bounded 0-3; at most 1 in an `issue-cycle`
+     full-auto run on Claude Code — is never exceeded** (budget + 1
      implementer attempts total, plus at most one wording fast-path round). Still failing → blocked path (step f), with the
      latest findings as the blocker explanation. Record verification rounds and ladder retries
      used for the summary table.

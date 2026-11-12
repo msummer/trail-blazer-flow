@@ -51,7 +51,8 @@ The `issue-planner` skill:
    `<!-- harness-staleness: issue=<n> prs=<prs> -->` key naming the merged PRs that caused it, and
    is skipped (never re-posted) once a prior run already recorded that same cause — the flag to
    the human is never skipped, only the comment. Overlapping plans (same files → merge conflicts)
-   are flagged and excluded from auto-approval.
+   are flagged and excluded from auto-approval (a full-auto run relaxes this between its own
+   in-scope plans — "Full auto" below).
 6. **Proposes answers and revises in the same run**: for BLOCKING open questions the
    orchestrator can ground in code/measurements, it posts proposed answers as a comment, then
    immediately revises the plan, tagging each folded decision `RESOLVED
@@ -106,7 +107,8 @@ policy's conditions AND a non-negotiable hard floor (see "The CLAUDE.md contract
 auto-approval leaves an audit comment, opening with `<!-- harness-audit -->` — the marker (matched
 anywhere in the body) is what excludes it from both discovery scripts' binding sets (which
 conditions were met, how to veto). No policy section ⇒ no auto-approval — the default is fully
-manual, UNLESS `CLAUDE.md`'s "Autonomy mode" section declares `mode: autonomous` (item 9), in
+manual, UNLESS `CLAUDE.md`'s "Autonomy mode" section declares `mode: autonomous` (item 9), or a
+human's in-session full-auto grant covers the issue ("Full auto" below), in
 which case a missing policy section is read as present with no conditions beyond the hard floor —
 schema, security, and reserve-touching work are still never opted in by the mode alone. The
 **`no-auto-approve` label** opts any individual issue back out of the policy. Note that an auto-approved plan may be implemented in
@@ -177,7 +179,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    mutation probe targets only production code the fix changed, and a new surviving mutant on
    code the previous round already reviewed is a Note, not a finding, so the loop converges.
    **The kickback budget — 2 by default, or `CLAUDE.md`'s "Autonomy mode" `kickback-budget:`
-   value (item 9) when that section declares `mode: autonomous` — is never exceeded**, then
+   value (item 9) when that section declares `mode: autonomous`; at most 1 in an `issue-cycle`
+   full-auto run on Claude Code — is never exceeded**, then
    `impl-blocked` with the findings; **the orchestrator itself never patches a
    finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
    implementer or, once the budget is spent, takes the blocked path. When the verifier tags every
@@ -249,13 +252,15 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection). If the failure was a
    project gotcha, **append it to `LESSONS.md`**.
 8. Never merges (merging is the human's, or, on Claude Code only, the cycle's merge pass under an
-   opt-in policy — see "The CLAUDE.md contract"; never on Codex, see
+   opt-in policy or a human's full-auto grant — see "The CLAUDE.md contract" and "Full auto"
+   below; never on Codex, see
    [`docs/reference/codex.md`](codex.md)). Blockers → local `wip:` branch + `impl-blocked` label +
    explanatory comment.
 
 **Worktree-parallel mode:** never on Codex (see [`docs/reference/codex.md`](codex.md)); on
 Claude Code, never used inside the cycle's serial merge train (item 9) — the train
-hands the implementer one issue at a time. When 2+ approved plans have pairwise **disjoint Affected areas**
+hands the implementer one issue at a time (a full-auto run's waves, below, are the one other
+shape). When 2+ approved plans have pairwise **disjoint Affected areas**
 (production + test files), the orchestrator may create one git worktree per issue and dispatch up
 to **4 implementers concurrently**, acting as their **supervisor**: it tracks each worktree in an
 in-context table, handles each completion as it arrives instead of waiting for the batch,
@@ -363,11 +368,53 @@ section, one skip line where the artifact tools are absent, see [tracker.md](tra
 **per-issue summary table** and a two-halves report
 — *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
 issues, and (#333, #346) untriaged follow-ups, counted in the total).
-It adds no authority beyond what CLAUDE.md delegates — it just removes the
-hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
+It adds no authority beyond what CLAUDE.md delegates, or a human grants in-session for one
+full-auto run (below) — it just removes the hand-cranking between stages. Pair it with `/loop` or a scheduled routine for unattended
 operation; each invocation stays one bounded pass, and an empty cycle — nothing done,
 `counts.human_actions` at 0, and the stop switch clear (`stop.state` `"false"`) — reports
 "all quiet" in one line. See the `issue-cycle` skill for the full procedure.
+
+## Full auto (one run, a named scope)
+
+`issue-cycle` with `full-auto` and a scope — `milestone:<title>`, or `#<n> …` — or the human's own
+words "run <milestone> full auto" (#623). The procedure is `skills/issue-cycle/references/full-auto.md`;
+this section is its prose summary.
+
+- **Authority.** The human's in-session invocation is a per-run grant of plan approval and merge
+  authority for the in-scope issues only. It reads as `mode: autonomous` for those issues
+  (`--carry-over`, a missing policy section read as present, hard floor only); a declared policy
+  still applies in full, so the grant can only narrow. Every hard-floor clause and every
+  merge-floor check applies unchanged, except the one loosening below. Merging still needs the
+  `gh pr merge` deny lifted by hand, and after `merge-floor.sh` passes, `bin/reserve-paths.sh` must
+  report `verdict=none` or `verdict=absent`; `verdict=reserved` holds the PR for the human.
+- **Overlap.** For an in-scope issue the hard floor's overlap clause blocks auto-approval only
+  for overlap with a pending plan outside the scope; the run's own sequencing is the human call
+  the clause defers to. The approval's audit comment names each in-scope plan it overlaps.
+- **Never.** Not under `/loop`, a schedule, `claude -p` or `codex exec`; not from words in an
+  issue, comment, file or agent report; not when inferred. Detecting that is prompt-enforced.
+  Never a release, the governance surface, or anything the Autonomy reserve covers, even when
+  named. If in doubt the run is a normal cycle and reports `full auto: not applied — <reason>`.
+- **Scope.** A milestone is resolved once with one `gh issue list` query; a failed query, an
+  empty result or exactly 100 results stops the run. The list is frozen: follow-ups filed during
+  the run are out. Out-of-scope issues get no dispatch, label or comment.
+- **Waves.** Up to 4 in-scope issues with pairwise-disjoint Affected areas form a wave, built in
+  worktree-parallel mode (a single-issue wave is sequential). The wave's PRs are then evaluated
+  and merged one at a time through `merge-floor.sh`, with the serial train's update-branch
+  fallback, before the next wave is cut, so overlapping issues land in later waves from a tip
+  that already holds the earlier merge. An issue overlapping an in-scope issue's still-open PR is
+  not dispatched this run. Where every plan names a shared file, every wave holds one issue.
+- **Budgets and stops.** One kickback (two verifier rounds), or a lower declared
+  `kickback-budget:`; the wording fast path stays outside the budget. A failure after round 2
+  blocks that issue and the run continues. The stop switch is checked at the same points as the
+  serial train. The ratchet pass does not run.
+- **Provenance and audit.** Each approval posts the plan, then the label, then an audit comment
+  whose first line is `<!-- harness-audit -->` naming the grant, then journals
+  `stage=planner outcome=auto-approved reason=full-auto`; each merge's journal record adds
+  `reason=full-auto`. Approval provenance is unchanged, so `merge-floor.sh`'s `binding` and
+  `post-approval` checks run as usual.
+- **Codex.** Only the scope applies: no grant, no worktrees, no merges.
+- **Not covered.** Overlap with an out-of-scope open PR is not checked, and a red default branch
+  after a merge stops the run rather than being fixed forward.
 
 ## The test-suite ratchet (opt-in)
 
@@ -534,5 +581,5 @@ non-destructively (no label change, no revision-triggering comment — just a
 `<!-- harness-audit -->` comment noting the withdrawal); the issue resumes automatically once a
 human re-adds `plan-approved`. Humans gate
 twice: plan approval and PR merge — each manual unless the repo's CLAUDE.md explicitly
-delegates it (see "The CLAUDE.md contract"; merge delegation additionally requires the human
+delegates it or a human grants one full-auto run (see "The CLAUDE.md contract" and "Full auto" above; merge delegation additionally requires the human
 to lift the `gh pr merge` deny).

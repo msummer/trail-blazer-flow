@@ -949,7 +949,8 @@ policy" section exists, say once, in "waits on the human": "merge pass not run: 
 merge is the human's." List the PRs exactly as usual. `mode: autonomous` is read as **absent**:
 no implied auto-approval or merge-autonomy section, no `--carry-over`, no serial train, and a
 kickback budget of 2 (the skill's own default). A declared "Plan auto-approval policy" still
-applies — every PR still waits for a human merge either way. `gh pr merge` is additionally
+applies — every PR still waits for a human merge either way. A full-auto invocation on Codex
+narrows the run to its scope only: no grant, no worktrees, no merges, and one report line saying so. `gh pr merge` is additionally
 `forbidden` by the installed rules (see "Rules" above) — the mechanical backstop behind this.
 
 ### `harness-setup` on Codex
