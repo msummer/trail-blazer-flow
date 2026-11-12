@@ -5236,6 +5236,170 @@
       ]
     },
     {
+      "name": "605-ab-deploy-carve-any",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "    if (!(k in carve_set)) return 0\n",
+          "to": "    if (0) return 0\n"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-sub",
+        "ab-deploy-deny-codex",
+        "ab-deploy-deny-direct",
+        "ab-deploy-deny-launcher",
+        "ab-deploy-deny-script",
+        "ab-deploy-never-executes"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-carve-need",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "if (k in carve_need) {",
+          "to": "if (0) {"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-sub"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-carve-prefix",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "dep_check(toks, idx - 1, ntok, saw_prefix)",
+          "to": "dep_check(toks, idx - 1, ntok, 0)"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-sub"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-carve-run",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "if (w == \"run\" || w == \"run-script\") rs = 1",
+          "to": "if (0) rs = 1"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-sub"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-carve-bun",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "  if (w == \"bun\" && dep_norm(toks[at + 1]) != \"x\") rs = 1\n",
+          "to": ""
+        },
+        {
+          "from": "    if (w == \"bun\" && dep_norm(toks[j + 1]) != \"x\") rs = 1\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-sub"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-veto-squote",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "gsub(sq, \"\", dv_copy); ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-veto"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-veto-brace",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "    if (dep_veto == \"\" && index($0, \"{\") > 0) dep_veto = \"{\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-veto"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-veto-off",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "{ dep_veto = rf_arr[dv_i]; break }",
+          "to": "{ break }"
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-veto",
+        "ab-deploy-never-executes"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-veto-quote",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "gsub(/\"/, \"\", dv_copy); ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-veto"
+      ]
+    },
+    {
+      "name": "605-ab-deploy-veto-expansion",
+      "target": "hooks/agent-boundary.sh",
+      "suite": "dev/hook-tests.sh",
+      "filter": "ab-deploy-",
+      "edits": [
+        {
+          "from": "if (dep_veto == \"\" && index($0, \"$\") > 0) dep_veto = \"$\"",
+          "to": "if (0) dep_veto = \"$\""
+        },
+        {
+          "from": "if (dep_veto == \"\" && index($0, \"`\") > 0) dep_veto = \"`\"",
+          "to": "if (0) dep_veto = \"`\""
+        }
+      ],
+      "expect_fail": [
+        "ab-deploy-carve-deny-veto"
+      ]
+    },
+    {
       "name": "543-ab-cmdcap-off-by-one",
       "target": "hooks/agent-boundary.sh",
       "suite": "dev/hook-tests.sh",

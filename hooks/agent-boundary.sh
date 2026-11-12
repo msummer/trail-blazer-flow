@@ -16,7 +16,9 @@
 #   - both roles: a path under a .claude segment in a write position (a redirect target, an argument of a
 #     CLAUDE_PATH_ARG_COMMANDS member, an in-place sed argument) or an interpreter or one-step writer
 #     (CLAUDE_CMDLINE_WRITE_COMMANDS) sharing the call with a .claude mention anywhere;
-#   - both roles (#551): a DEPLOY_COMMANDS entry as the command word, as the word a LAUNCH_WORDS launcher hands
+#   - both roles (#551, #605): a DEPLOY_COMMANDS entry outside the DEPLOY_CARVE_OUTS table (a carved row is
+#     denied as "<cli> with <veto>" when the command names a DEPLOY_REMOTE_FLAGS member, a dollar sign, a brace or a
+#     backtick) as the command word, as the word a LAUNCH_WORDS launcher hands
 #     on to, or in a segment tail the scan cannot follow; and, after npm, pnpm, yarn or bun, a script name
 #     containing "deploy". package.json is never read. This deny is printed last, so any other deny decides first;
 #   - both roles (#543): a command over AB_CMD_MAX_BYTES bytes, or over AB_CR_MAX_BYTES bytes when it carries a
@@ -90,17 +92,25 @@ CLAUDE_CMDLINE_WRITE_COMMANDS="python perl ruby node nodejs deno bun php lua awk
 # reading past it denies a -c string that names gh, git or a .claude path after its first word, an accepted
 # over-block (docs/reference/safety-model.md, "Known over-blocks").
 PREFIX_VALUE_WORDS="exec nice stdbuf sudo time xargs bash dash ksh sh zsh"
-# DEPLOY_COMMANDS (#551): a comma-separated list of deploy and cloud CLIs, denied whatever their subcommand or
-# flags (no carve-outs). An entry of two or three words is a phrase (prisma db push). LAUNCH_WORDS: the
+# DEPLOY_COMMANDS (#551): a comma-separated list of deploy and cloud CLIs, denied unless the command is a
+# DEPLOY_CARVE_OUTS row (#605) with no veto (below). An entry of two or three words is a phrase (prisma db push). LAUNCH_WORDS: the
 # launchers and package managers whose next non-option word is the CLI they run, plus the sub-words skipped
 # after one (exec x dlx run run-script). After npm, pnpm, yarn or bun that word is read the way a
 # launcher's is, unless it is one of the package manager own subcommands (add, install, remove, ...; the
 # regex in dep_check), which ends the read with no hit. So a script named for a listed CLI denies as that CLI (npm run
 # vercel), a word containing "deploy" denies as a package script, and package.json is never opened, so any
-# other script name is not judged. Every head word of DEPLOY_COMMANDS, and "deploy", also sits in fast path 2
+# other script name is not judged. A carve-out applies to the bare CLI and to a launcher route, not behind a
+# PREFIX_WORDS member, not in a segment tail the scan cannot follow, and not after run, run-script or a bare bun word (bun x excepted); the
+# veto pass costs O(record) per record and the table match at most O(segment) per segment. Every head word of DEPLOY_COMMANDS, and "deploy", also sits in fast path 2
 # below.
 DEPLOY_COMMANDS="vercel,netlify,fly,flyctl,wrangler,railway,heroku,aws,gcloud,az,doctl,terraform,pulumi,supabase,stripe,kubectl,helm,prisma migrate deploy,prisma db push,drizzle-kit push"
 LAUNCH_WORDS="npx bunx pnpx uvx pipx npm pnpm yarn bun exec x dlx run run-script"
+# DEPLOY_CARVE_OUTS (#605): comma-separated rows, each a listed CLI plus the exact subcommand word(s) that must
+# come right after it; a row word starting with -- is a required flag, not a subcommand word (gen types needs
+# --local). DEPLOY_REMOTE_FLAGS: a substring of any of these anywhere in the command (quotes and backslashes
+# stripped, case-folded) cancels every carve-out, and so does a dollar sign, a backtick or a brace.
+DEPLOY_CARVE_OUTS="supabase start,supabase status,supabase stop,supabase db reset,supabase db diff,supabase db lint,supabase test db,supabase migration new,supabase gen types --local,terraform fmt,terraform validate,helm lint,helm template,wrangler dev,wrangler types"
+DEPLOY_REMOTE_FLAGS="--linked --db-url --project-ref --project-id --prod --remote --validate"
 # AB_CMD_MAX_BYTES (#543): the longest Bash command, in BYTES, analysed at all. A longer one denies before the
 # carriage-return strip and the scan: this hook has no deadline, so only a cap keeps the scan inside the hook
 # timeout, and a timed-out hook gives no deny. Sized above every cooperative subagent command measured.
@@ -236,12 +246,13 @@ cmd="${cmd//$cr/}"
 #                             the sentinel -none-, -globalopt- or -prefix- (#505)
 #   -claude-write- <token>    a .claude path in a write position, or an interpreter word sharing the call
 #                             with a .claude mention (#340, #387)
-#   -deploy- <entry>          a DEPLOY_COMMANDS entry, or package script <name> (#551); printed once, last, by
+#   -deploy- <entry>          a DEPLOY_COMMANDS entry, or package script <name> (#551), or <entry> with <veto> for
+#                             a carved row the veto cancels (#605); printed once, last, by
 #                             its own END block, so an earlier finding always decides first
 #
 # Each rule is described next to its code: the per-record block (redirect pass, base split, command-level
 # capture) and emit_segment() (the walk; #505 lost prefix, #518 value context).
-scan_out="$( { printf '%s\n' "$cmd"; { printf '%s\n' "$cmd" | awk 'BEGIN { cr = sprintf("%c", 13) } { gsub(cr, ""); if (substr($0, length($0)) == "\\") { printf "%s", substr($0, 1, length($0) - 1); c = 1 } else if (c) { print; c = 0 } } END { if (c) printf "\n" }'; } 2>/dev/null; } | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v vpwords="$PREFIX_VALUE_WORDS" -v dep_cmds="$DEPLOY_COMMANDS" -v launch_words="$LAUNCH_WORDS" '
+scan_out="$( { printf '%s\n' "$cmd"; { printf '%s\n' "$cmd" | awk 'BEGIN { cr = sprintf("%c", 13) } { gsub(cr, ""); if (substr($0, length($0)) == "\\") { printf "%s", substr($0, 1, length($0) - 1); c = 1 } else if (c) { print; c = 0 } } END { if (c) printf "\n" }'; } 2>/dev/null; } | awk -v prefix_words="$PREFIX_WORDS" -v arg_cmds="$CLAUDE_PATH_ARG_COMMANDS" -v cw_cmds="$CLAUDE_CMDLINE_WRITE_COMMANDS" -v vpwords="$PREFIX_VALUE_WORDS" -v dep_cmds="$DEPLOY_COMMANDS" -v launch_words="$LAUNCH_WORDS" -v carve_rows="$DEPLOY_CARVE_OUTS" -v remote_flags="$DEPLOY_REMOTE_FLAGS" '
 BEGIN {
   sq = sprintf("%c", 39)
   n = split(prefix_words, pwarr, " ")
@@ -256,6 +267,18 @@ BEGIN {
   for (i = 1; i <= nd; i++) dep_set[darr[i]] = 1
   nl = split(launch_words, larr, " ")
   for (i = 1; i <= nl; i++) launch_set[larr[i]] = 1
+  cb_n = split(carve_rows, cb_rows, ",")
+  for (cb_i = 1; cb_i <= cb_n; cb_i++) {
+    cb_nw = split(cb_rows[cb_i], cb_w, " ")
+    cb_key = ""; cb_need = ""
+    for (cb_k = 1; cb_k <= cb_nw; cb_k++) {
+      if (substr(cb_w[cb_k], 1, 2) == "--") cb_need = cb_w[cb_k]
+      else cb_key = (cb_key == "" ? "" : cb_key " ") cb_w[cb_k]
+    }
+    carve_set[cb_key] = 1
+    if (cb_need != "") carve_need[cb_key] = cb_need
+  }
+  nrf = split(remote_flags, rf_arr, " ")
 }
 function normalize(tok,    t, parts, np) {
   t = tok
@@ -367,8 +390,27 @@ function dep_at(toks, j,    p) {
   p = p " " dep_norm(toks[j + 2])
   return (p in dep_set) ? p : ""
 }
+# dep_carve (#605): 1 iff the entry e found at toks[j], followed by the next one or two dep_norm words, spells a
+# carve-out key (carve_set); a key with a required flag also needs a later token of the segment that is exactly
+# that flag. A phrase entry or a package script never matches. Cost: at most two lookups plus one pass over the
+# rest of the segment, once per segment.
+function dep_carve(toks, j, e, ntok,    k, i) {
+  k = e " " dep_norm(toks[j + 1])
+  if (!(k in carve_set)) {
+    k = k " " dep_norm(toks[j + 2])
+    if (!(k in carve_set)) return 0
+  }
+  if (k in carve_need) {
+    for (i = j + 1; i <= ntok; i++) if (toks[i] == carve_need[k]) return 1
+    return 0
+  }
+  return 1
+}
 # dep_check: the deploy verdict for the command word at toks[at], recorded in the global dep_word (the second
-# END block prints it). A listed entry is the verdict. A LAUNCH_WORDS member (npx, pnpm dlx, uvx, ...) hands on
+# END block prints it). A listed entry is the verdict, except that a carve-out (dep_carve) outside a prefix
+# word (the pfx parameter) and not after run, run-script or a bare bun word (bun x excepted) is recorded in
+# dep_carved instead, and the second END block denies it only when the veto pass found a remote flag, a dollar
+# sign, a backtick or a brace. A LAUNCH_WORDS member (npx, pnpm dlx, uvx, ...) hands on
 # to the word it runs, so the words after it are read left to right: a dash option and the sub-words
 # (exec x dlx run run-script) are skipped, as is the word right after a dash option (it may be that option
 # value), and the first other word ends the read. Each word read is a listed entry, or, after npm, pnpm, yarn
@@ -378,15 +420,20 @@ function dep_at(toks, j,    p) {
 # taken for an option value: pnpm -w add stripe installs stripe, it does not run it. run, run-script, exec, x
 # and dlx are not on that list, and neither is publish. Cost: one pass over the segment, constant work per
 # token.
-function dep_check(toks, at, ntok,    j, w, h, pm, vd) {
+function dep_check(toks, at, ntok, pfx,    j, w, h, pm, vd, rs) {
   dep_word = dep_at(toks, at); w = dep_norm(toks[at])
+  if (dep_word != "" && !pfx && dep_carve(toks, at, dep_word, ntok)) { if (dep_carved == "") dep_carved = dep_word; dep_word = ""; return }
   if (dep_word != "" || !(w in launch_set)) return
   pm = (w ~ /^(npm|pnpm|yarn|bun)$/)
+  if (w == "bun" && dep_norm(toks[at + 1]) != "x") rs = 1
   for (j = at + 1; j <= ntok; j++) {
     w = dep_norm(toks[j]); h = dep_at(toks, j)
     if (pm && w ~ /^(add|install|i|ci|remove|rm|uninstall|un|update|up|upgrade|link|unlink|outdated|audit|why|ls|list|info|view|pack|init|create)$/) return
     if (h == "" && substr(w, 1, 1) == "-") { vd = 1; continue }
+    if (w == "run" || w == "run-script") rs = 1
+    if (w == "bun" && dep_norm(toks[j + 1]) != "x") rs = 1
     if (h == "" && pm && index(w, "deploy") > 0) h = "package script " w
+    if (h != "" && !pfx && !rs && dep_carve(toks, j, h, ntok)) { if (dep_carved == "") dep_carved = h; return }
     if (h != "") { dep_word = h; return }
     if (w == "" || vd || (w in launch_set)) { vd = 0; continue }
     return
@@ -438,7 +485,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     break
   }
   if (cmdword == "") return
-  if (dep_word == "") dep_check(toks, idx - 1, ntok)
+  if (dep_word == "") dep_check(toks, idx - 1, ntok, saw_prefix)
   if (cmdword == "git") {
     gitsub = ""
     j = idx
@@ -488,6 +535,17 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
     if (has_claude_seg(rd_tgt)) print "-claude-write- " rd_tgt
     rd_rest = substr(rd_rest, RSTART + RLENGTH)
   }
+  # #605: the veto pass, once per record (the joined continuation records included): the record case-folded
+  # with quotes and backslashes deleted holds a DEPLOY_REMOTE_FLAGS member, else the raw record holds a dollar
+  # sign, a backtick or a brace. Cost: O(record) plus at most nrf index calls.
+  if (dep_veto == "") {
+    dv_copy = tolower($0)
+    gsub(sq, "", dv_copy); gsub(/"/, "", dv_copy); gsub(/\\/, "", dv_copy)
+    for (dv_i = 1; dv_i <= nrf; dv_i++) if (index(dv_copy, rf_arr[dv_i]) > 0) { dep_veto = rf_arr[dv_i]; break }
+    if (dep_veto == "" && index($0, "$") > 0) dep_veto = "$"
+    if (dep_veto == "" && index($0, "`") > 0) dep_veto = "`"
+    if (dep_veto == "" && index($0, "{") > 0) dep_veto = "{"
+  }
   line = $0
   gsub(/[;&|(){}`]/, "\n", line)
   gsub(/[<>]/, " ", line)
@@ -501,7 +559,7 @@ function emit_segment(seg,    ntok, toks, idx, tok, norm, saw_prefix, cmdword, j
   }
 }
 END { if (cw_word != "" && cw_tok != "") print "-claude-write- " cw_word " with " cw_tok }
-END { if (dep_word != "") print "-deploy- " dep_word }
+END { if (dep_word != "") print "-deploy- " dep_word; else if (dep_carved != "" && dep_veto != "") print "-deploy- " dep_carved " with " dep_veto }
 ' 2>/dev/null)"
 scan_rc=$?
 # #559: a non-zero status means the scan (the joiner included: pipefail carries its status out of the group)
