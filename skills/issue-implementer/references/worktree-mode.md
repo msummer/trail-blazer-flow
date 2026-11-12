@@ -32,6 +32,16 @@ below) through to its PR or its blocked commit before picking up the next report
 finished worktree behind an unfinished one. Whatever the round produces — kickbacks, resume
 relaunches, ladder retries, newly freed slots — becomes the next round's batch.
 
+**Stop check before every new launch.** Before any round that would start an issue not yet started
+(the first batch included), run `SKILL.md` step 2's per-issue stop check (`harness-stop.sh`) once,
+ahead of that issue's step b; one check covers the whole batch. A round of only relaunches,
+kickbacks, ladder retries, resume relaunches or CI-fix re-dispatches into existing worktrees needs
+none. On stop, take step 2's stop path with "the issue currently in flight" read as every worktree
+already launched: launch no further new issue for the rest of the run, never re-check to resume,
+and let each launched worktree finish under the rules below until it is terminal (step f). Exit
+codes follow the `issue-cycle` skill's *Stop switch* section (stop, `unknown` and an undocumented
+exit all stop; exit 2 or a missing command reports loudly and keeps going).
+
 Three rules keep one sick worktree from stalling the swarm:
 
 - **Checkpoint in the worktree before every re-dispatch into it** — ladder retry, resume
@@ -80,7 +90,8 @@ a. **Stale worktrees are already swept.** The issue-implementer skill's step 0 p
    it once per run, before any issue work and in both modes — nothing to repeat here. If a
    straggler survives it, step b's last bullet (below) routes back to that rule.
 
-b. **Create one worktree per issue** (siblings of the repo, never nested inside it). The branch
+b. **Create one worktree per issue** (siblings of the repo, never nested inside it), a queued
+   issue's only when it takes a slot, after the round's stop check. The branch
    may already exist — resume-not-restart makes leftover wip branches routine — so classify
    before you create:
 ```bash
@@ -128,7 +139,8 @@ c. **Dispatch the implementers as one batch** (up to the concurrency bound; they
    Git Bash, where backslash paths get mangled by quoting. Also name the sibling issues'
    affected files as explicitly out of scope ("issues <n>, <m> are being implemented
    concurrently — do NOT touch <their files>") so a subagent that discovers adjacent work
-   doesn't drift into a concurrent issue's territory. Immediately before each issue's first
+   doesn't drift into a concurrent issue's territory. Before that issue's step b the round's
+   stop check has run (Supervisor loop above); immediately before each issue's first
    dispatch in the batch (never a relaunch or kickback), `gh issue edit <number> --add-label
    building` — best effort, per the skill's "Labels involved".
 
@@ -240,3 +252,6 @@ g. Everything else is unchanged: same labels, same PR contract, same CI-fix budg
    table — add a worktree/parallel column so the human knows which mode ran, and note per issue
    whether its branch was created fresh, resumed, or reset, and whether the issue-implementer
    skill's step 0 pre-flight sweep swept a stale worktree for it.
+   If a stop check stopped the swarm, the summary names the stop, pastes its `route=`/`clear=`/
+   `reason=` lines exactly as printed, and lists each queued issue never launched as not
+   dispatched because of the stop (no worktree, branch or `building` label for it).

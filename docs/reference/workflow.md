@@ -263,7 +263,9 @@ already run for both modes, and an existing `claude/<n>-*` branch is attached an
 resumed instead of failing a `git worktree add -b` — reset fresh only when its newest commit is a
 `wip: blocked — …`, exactly as sequential mode decides. Ignored files (venvs, `node_modules`)
 don't exist in fresh worktrees: verification runs the main checkout's tool binaries against the
-worktree, and UI-heavy issues that need per-tree installs fall back to sequential. Any overlap or
+worktree, and UI-heavy issues that need per-tree installs fall back to sequential. The stop
+switch is checked before each new issue takes a slot; on stop, no further issue launches and the
+worktrees already running finish. Any overlap or
 doubt → sequential.
 
 ## Resilience: checkpointing, retries, and the dispatch ledger
