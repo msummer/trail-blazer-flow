@@ -381,6 +381,10 @@ next cycle take it; name a ratchet-pass filing as such, not a discrepancy) — u
 pre-flight discovery output, in which case the seed step missed it: escalate that. Script not
 found → fall back to comparing the ledger against the JSON by hand, same criteria.
 
+**Tracker sync (best-effort).** Run the `tracker` skill's Sync procedure; it is silent without a
+"Tracker" section and prints one skip line where it cannot run (Codex, headless). Put its lines
+in "what this cycle did"; it never fails, stops or delays the run. Not run on the step-0 stop path.
+
 **Per-issue summary table**, before the two-halves report: issue, planned / implemented /
 verified / merged (outcome or "—"), retries, duration, final state, escalations.
 

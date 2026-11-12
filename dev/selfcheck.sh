@@ -841,11 +841,12 @@ fi
 # references/worktree-mode.md is deliberately unbudgeted (the glob is skills/*/SKILL.md only) —
 # read on demand, not on every run.
 budget_table="issue-implementer 935
-issue-cycle 490
+issue-cycle 495
 issue-planner 600
-project-kickoff 220
+project-kickoff 225
 test-ratchet 205
-harness-setup 205"
+harness-setup 210
+tracker 70"
 bad_list=""
 while IFS=' ' read -r skill cap; do
   [ -n "$skill" ] || continue

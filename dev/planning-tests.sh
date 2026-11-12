@@ -8,7 +8,9 @@
 # gh call site — see build_stub_stop below), via Part 14 (run_status too, but behind
 # a canned stand-in for both discovery scripts — see build_stub_discovery below), and the merge
 # floor itself, bin/merge-floor.sh, via Part 16 (a copy of the script run beside canned stand-ins
-# for its three siblings, with a stub `gh`, `git` and `sleep` — see build_floor_env below) — not
+# for its three siblings, with a stub `gh`, `git` and `sleep` — see build_floor_env below), and the
+# tracker projection, bin/tracker-sync.sh, via Part 17 (the real script, with a stub `gh`, `git`
+# and `date` — see build_tracker_env below) — not
 # this repo's own gate (that's dev/selfcheck.sh +
 # dev/selfcheck-tests.sh) and not the consumer doctor's harness (dev/doctor-tests.sh). Builds
 # throwaway fixture directories under mktemp, with a stub `gh` on PATH, and runs the REAL script(s)
@@ -28,7 +30,7 @@
 # Every write happens under one `mktemp -d` root, removed via an EXIT trap. No git fixture is
 # needed — (#353) bin/harness-status.sh now also shells out to harness-stop.sh, but the canned
 # build_stub_stop stand-in that shadows it needs none either, so neither script under test ever
-# reaches a real `git` (Part 16's merge floor does call `git`, through a stub) — so each fixture
+# reaches a real `git` (Parts 16 and 17 do call `git`, through a stub) — so each fixture
 # is just a directory holding a stub `gh` (offline, deterministic) plus the JSON payloads it
 # serves:
 #   - initial.json           : the needs_initial_plan query's response (find-planning-work.sh)
@@ -12564,6 +12566,543 @@ exit 1'
 }
 
 # ---------------------------------------------------------------------------------------------
+# Part 17 (#622), against bin/tracker-sync.sh — the read-only projection behind the opt-in live
+# tracker. Every fixture runs the REAL script from $root/bin with DIR/work as cwd and DIR/tbin
+# ahead of PATH. DIR/tbin holds a stub `gh` (validates the --json field list of `issue list` and
+# `pr list` against the probed field sets above; `repo view` and `api` stay unvalidated, the same
+# carve-out Part 16 documents; logs every call to DIR/.gh-calls; one reject-<site> marker per query
+# site), a stub `git` (--show-toplevel is DIR/work, --git-common-dir is DIR/work/.git, and a
+# not-a-repo marker makes it exit 128) and a stub `date` printing a fixed timestamp. The stub's
+# `issue list --state closed` filters closed.json by the milestone NUMBER in its own --milestone
+# argument (a title passed instead would match the wrong milestone or none), so a script that
+# ignored the milestone would see another milestone's issues. The fixtures' JSON follows the shapes
+# probed on gh 2.102.0: blockedBy is {nodes:[...],totalCount:n}, an open issue's stateReason is "".
+# Bulky inputs (the too-large and truncated fixtures) are built with jq, never hand-typed.
+
+# tk_i NUMBER LABELS_JSON MILESTONE_NUMBER|null [BLOCKEDBY_JSON] [STATE] [STATEREASON] — one
+# `gh issue list` element; the milestone title is v<number>.
+tk_i() {
+  jq -n -c --argjson n "$1" --argjson l "$2" --argjson m "$3" --argjson b "${4:-null}" --arg st "${5:-OPEN}" --arg sr "${6:-}" \
+    '{number:$n,title:("Issue "+($n|tostring)),url:("https://example.invalid/o/r/issues/"+($n|tostring)),state:$st,stateReason:$sr,labels:($l|map({name:.})),milestone:(if $m==null then null else {number:$m,title:("v"+($m|tostring)),dueOn:null} end),blockedBy:(if $b==null then {nodes:[],totalCount:0} else $b end)}'
+}
+# tk_blocker NUMBER STATE — a blockedBy object with one node.
+tk_blocker() {
+  jq -n -c --argjson n "$1" --arg st "$2" \
+    '{nodes:[{id:"I_x",number:$n,state:$st,title:"t",url:("https://example.invalid/o/r/issues/"+($n|tostring))}],totalCount:1}'
+}
+# tk_arr ELEMENT... — a JSON array from compact elements (empty when none).
+tk_arr() {
+  if [ "$#" -eq 0 ]; then printf '[]\n'; return 0; fi
+  printf '%s\n' "$@" | jq -s -c '.'
+}
+
+tk_write_gh() {
+  local dir="$1" tmpl="$1/tbin/gh.tmpl"
+  {
+    printf '#!%s\n' "$bash_bin"
+    printf 'GH_PR_JSON_FIELDS="%s"\n' "$GH_PR_JSON_FIELDS"
+    printf 'GH_ISSUE_JSON_FIELDS="%s"\n' "$GH_ISSUE_JSON_FIELDS"
+    cat <<'EOF'
+validate_json_fields() {
+  local allowed="$1"; shift
+  local orig="$*" list="" found=0 tok
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = "--json" ]; then shift; list="${1:-}"; found=1; break; fi
+    shift
+  done
+  if [ "$found" -ne 1 ]; then echo "stub: no --json argument in: gh $orig" >&2; exit 1; fi
+  local IFS=,
+  for tok in $list; do
+    case " $allowed " in
+      *" $tok "*) : ;;
+      *) echo "Unknown JSON field: \"$tok\"" >&2; exit 1 ;;
+    esac
+  done
+}
+fire() { [ -f "__DIR__/reject-$1" ]; }
+printf '%s\n' "$*" >> "__DIR__/.gh-calls"
+case "$1 $2" in
+  "repo view")
+    if fire repo; then echo "stub: simulated gh repo view failure" >&2; exit 1; fi
+    cat "__DIR__/repo.json"; exit 0 ;;
+  "api "*)
+    case "$2" in
+      repos/*/milestones*)
+        if fire milestones; then echo "stub: simulated failure" >&2; exit 1; fi
+        cat "__DIR__/milestones.json"; exit 0 ;;
+      repos/*/branches/*)
+        if fire branch; then echo "stub: simulated failure" >&2; exit 1; fi
+        cat "__DIR__/branch.json"; exit 0 ;;
+    esac
+    echo "stub: unexpected api path $2" >&2; exit 1 ;;
+  "issue list")
+    validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"
+    case " $* " in
+      *" --state closed "*)
+        if fire issues-closed; then echo "stub: simulated failure" >&2; exit 1; fi
+        ms=""; prev=""
+        for a in "$@"; do
+          if [ "$prev" = "--milestone" ]; then ms="$a"; fi
+          prev="$a"
+        done
+        if [ -z "$ms" ]; then echo "stub: closed list without --milestone" >&2; exit 1; fi
+        jq -c --arg t "$ms" '[.[] | select(.milestone.number == ($t | tonumber? // -1))]' "__DIR__/closed.json"; exit 0 ;;
+      *" --state open "*)
+        if fire issues-open; then echo "stub: simulated failure" >&2; exit 1; fi
+        cat "__DIR__/open.json"; exit 0 ;;
+    esac
+    echo "stub: issue list without a --state" >&2; exit 1 ;;
+  "pr list")
+    validate_json_fields "$GH_PR_JSON_FIELDS" "$@"
+    if fire prs; then echo "stub: simulated failure" >&2; exit 1; fi
+    cat "__DIR__/prs.json"; exit 0 ;;
+  *) echo "stub: unexpected gh call: $*" >&2; exit 1 ;;
+esac
+EOF
+  } > "$tmpl"
+  sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/tbin/gh"
+  rm -f "$tmpl"
+  chmod +x "$dir/tbin/gh"
+}
+
+tk_write_git() {
+  local dir="$1" tmpl="$1/tbin/git.tmpl"
+  {
+    printf '#!%s\n' "$bash_bin"
+    cat <<'EOF'
+printf '%s\n' "$*" >> "__DIR__/.git-calls"
+case "$1 $2" in
+  "rev-parse --show-toplevel")
+    if [ -f "__DIR__/not-a-repo" ]; then echo "fatal: not a git repository" >&2; exit 128; fi
+    echo "__DIR__/work"; exit 0 ;;
+  "rev-parse --git-common-dir")
+    echo "__DIR__/work/.git"; exit 0 ;;
+esac
+exit 1
+EOF
+  } > "$tmpl"
+  sed "s#__DIR__#$dir#g" "$tmpl" > "$dir/tbin/git"
+  rm -f "$tmpl"
+  chmod +x "$dir/tbin/git"
+}
+
+# build_tracker_env DIR — stubs plus the default dataset: milestones v1 (no due date, listed first
+# and numbered first on purpose) and v2 (due 2026-11-01); open issues 1,2,3,4,5,12; closed issues 20,21 (v1) and 22
+# (v2); PRs 100,101 on claude/12-*, 102 on feature/12-x, 103 on claude/4-thing, 104 on claude/20-x.
+# CLAUDE.md carries a valid Tracker section.
+build_tracker_env() {
+  local dir="$1"
+  mkdir -p "$dir/tbin" "$dir/work/.git"
+  tk_write_gh "$dir"
+  tk_write_git "$dir"
+  printf '#!%s\nprintf "%%s\\n" "$*" >> "%s/.date-calls"\nprintf "2026-01-02T03:04:05Z\\n"\n' "$bash_bin" "$dir" > "$dir/tbin/date"
+  chmod +x "$dir/tbin/date"
+  printf '{"nameWithOwner":"o/r","url":"https://example.invalid/o/r","defaultBranchRef":{"name":"main"}}\n' > "$dir/repo.json"
+  printf '[{"number":1,"title":"v1","html_url":"https://example.invalid/o/r/milestone/1","due_on":null,"state":"open"},{"number":2,"title":"v2","html_url":"https://example.invalid/o/r/milestone/2","due_on":"2026-11-01T00:00:00Z","state":"open"}]\n' > "$dir/milestones.json"
+  printf '{"name":"main","commit":{"sha":"0123456789abcdef0123456789abcdef01234567"}}\n' > "$dir/branch.json"
+  tk_arr \
+    "$(tk_i 1 '[]' 1)" \
+    "$(tk_i 2 '["plan-proposed"]' 1 "$(tk_blocker 1 OPEN)")" \
+    "$(tk_i 3 '["plan-approved"]' 1 "$(tk_blocker 20 CLOSED)")" \
+    "$(tk_i 4 '["pr-open","plan-approved"]' 2)" \
+    "$(tk_i 5 '[]' null)" \
+    "$(tk_i 12 '[]' null)" > "$dir/open.json"
+  tk_arr \
+    "$(tk_i 20 '[]' 1 null CLOSED COMPLETED)" \
+    "$(tk_i 21 '[]' 1 null CLOSED NOT_PLANNED)" \
+    "$(tk_i 22 '[]' 2 null CLOSED COMPLETED)" > "$dir/closed.json"
+  jq -n -c '[{number:100,url:"https://example.invalid/o/r/pull/100",state:"MERGED",headRefName:"claude/12-a"},{number:101,url:"https://example.invalid/o/r/pull/101",state:"OPEN",headRefName:"claude/12-b"},{number:102,url:"https://example.invalid/o/r/pull/102",state:"OPEN",headRefName:"feature/12-x"},{number:103,url:"https://example.invalid/o/r/pull/103",state:"OPEN",headRefName:"claude/4-thing"},{number:104,url:"https://example.invalid/o/r/pull/104",state:"MERGED",headRefName:"claude/20-x"}]' > "$dir/prs.json"
+  tk_claude "$dir" 'url: https://example.invalid/artifact/abc'
+}
+
+# tk_claude DIR FENCE_BODY — CLAUDE.md with a "Tracker" section whose first fence holds FENCE_BODY.
+tk_claude() {
+  {
+    printf '# Project\n\nSome prose.\n\n## Tracker\n\nThe live tracker.\n\n```\n%s\n```\n\n## Other\n\ntext\n' "$2"
+  } > "$1/work/CLAUDE.md"
+}
+
+# run_tracker DIR ARGS... — the real script, cwd DIR/work, DIR/tbin ahead of PATH.
+run_tracker() {
+  local dir="$1"
+  shift
+  ( cd "$dir/work" && PATH="$dir/tbin:$PATH" "$bash_bin" "$root/bin/tracker-sync.sh" "$@" ) >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+tk_state_file() { printf '%s' "$1/work/.git/trail-blazer/tracker/state.json"; }
+# tk_real DIR — the physical (pwd -P) common dir the script prints, as macOS /var is a symlink.
+tk_real() { ( cd "$1/work/.git" && pwd -P ); }
+# tk_jq DIR QUERY EXPECTED — QUERY over state.json, compact output, must equal EXPECTED.
+tk_jq() {
+  local got
+  needle_required tk_jq "$2" || return 0
+  got="$(jq -c "$2" "$(tk_state_file "$1")" 2>&1)"
+  [ "$got" = "$3" ] || { __ok=0; __why="${__why}state.json $2: expected $3, got $got\n"; }
+}
+tk_no_state() {
+  [ ! -e "$(tk_state_file "$1")" ] || { __ok=0; __why="${__why}state.json should not exist\n"; }
+}
+
+# mutant:622-precedence — moves the pr-open arm of the state chain above needs-human and blocked,
+# so an issue carrying a higher-precedence label alongside pr-open reads pr-open.
+#
+# mutant:622-fail-open — lets a failed or non-array open-issue list fall through, so the snapshot
+# is built and written from an empty issue set instead of skipping.
+#
+# mutant:622-stale-file — deletes the up-front removal of state.json, so a failed sync leaves the
+# previous snapshot in place for the skill to push as if fresh.
+#
+# mutant:622-size-cap — disables the 1,000,000-byte check, so an oversized snapshot is written.
+#
+# mutant:622-absent-gh — makes a repo with no Tracker section call the GitHub CLI before printing
+# tracker=absent, so the "no section, no gh call" guarantee breaks.
+
+# tracker-absent / tracker-no-claude-md — no section, or no CLAUDE.md: exactly tracker=absent,
+# exit 0, no gh call, and nothing created. Killed by 622-absent-gh.
+case_tracker_absent() {
+  local dir; dir="$(mk_fixture tracker-absent)"
+  build_tracker_env "$dir"
+  printf '# Project\n\n## Verification\n\n```\nmake\n```\n' > "$dir/work/CLAUDE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  [ "$planning_out" = "tracker=absent" ] || { __ok=0; __why="${__why}stdout: expected tracker=absent, got $planning_out\n"; }
+  expect_no_log "$dir/.gh-calls"
+  [ ! -e "$dir/work/.git/trail-blazer" ] || { __ok=0; __why="${__why}absent run created .git/trail-blazer\n"; }
+}
+case_tracker_no_claude_md() {
+  local dir; dir="$(mk_fixture tracker-no-claude-md)"
+  build_tracker_env "$dir"
+  rm -f "$dir/work/CLAUDE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  [ "$planning_out" = "tracker=absent" ] || { __ok=0; __why="${__why}stdout: expected tracker=absent, got $planning_out\n"; }
+  expect_no_log "$dir/.gh-calls"
+}
+
+# tk_malformed NAME FENCE_BODY TOKEN — a malformed section: exit 1, tracker=malformed then
+# reason=TOKEN, no gh call, nothing written.
+tk_malformed() {
+  local dir; dir="$(mk_fixture "$1")"
+  build_tracker_env "$dir"
+  if [ -n "${4:-}" ]; then printf '%s\n' "$4" > "$dir/work/CLAUDE.md"; else tk_claude "$dir" "$2"; fi
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'tracker=malformed\nreason=%s' "$3")" ] || { __ok=0; __why="${__why}stdout: expected malformed/$3, got $planning_out\n"; }
+  expect_no_log "$dir/.gh-calls"
+  tk_no_state "$dir"
+}
+case_tracker_malformed_no_fence() {
+  tk_malformed tracker-malformed-no-fence '' no-fence "$(printf '# P\n\n## Tracker\n\nurl: https://example.invalid/x\n')"
+}
+case_tracker_malformed_no_url() {
+  tk_malformed tracker-malformed-no-url "$(printf '# only a comment\n\n')" no-url
+}
+case_tracker_malformed_multiple_urls() {
+  tk_malformed tracker-malformed-multiple-urls "$(printf 'url: https://example.invalid/a\nurl: https://example.invalid/b')" multiple-urls
+}
+case_tracker_malformed_bad_url() {
+  local v
+  tk_malformed tracker-malformed-bad-url 'url: http://example.invalid/a' bad-url
+  for v in 'url: https://example.invalid/a b' 'url: https://example.invalid/a"b' 'url: example.invalid/a' 'url: https://'; do
+    tk_malformed tracker-malformed-bad-url "$v" bad-url
+  done
+}
+case_tracker_malformed_unknown_key() {
+  tk_malformed tracker-malformed-unknown-key "$(printf 'url: https://example.invalid/a\nname: x')" unknown-key
+}
+
+# tracker-sync-baseline — the full stdout grammar in order, the file location under the git common
+# dir, compact one-line JSON, and every schema field of the default dataset.
+case_tracker_sync_baseline() {
+  local dir want real; dir="$(mk_fixture tracker-sync-baseline)"
+  build_tracker_env "$dir"
+  real="$(tk_real "$dir")"
+  run_tracker "$dir"
+  expect_rc 0
+  want="tracker=present
+url=https://example.invalid/artifact/abc
+dir=$real/trail-blazer/tracker
+file=$real/trail-blazer/tracker/state.json
+collection=harness
+doc=state
+issues=9
+milestones=2
+truncated=false
+checked=2026-01-02T03:04:05Z
+result=ready"
+  [ "$planning_out" = "$want" ] || { __ok=0; __why="${__why}stdout mismatch, got:\n$planning_out\n"; }
+  [ "$(wc -l < "$(tk_state_file "$dir")" | tr -d ' ')" = 1 ] || { __ok=0; __why="${__why}state.json is not one compact line\n"; }
+  expect_log_count "$dir/.date-calls" '-u ' 1
+  tk_jq "$dir" '.schema' 1
+  tk_jq "$dir" '.repo' '"o/r"'
+  tk_jq "$dir" '.repoUrl' '"https://example.invalid/o/r"'
+  tk_jq "$dir" '.checkedAt' '"2026-01-02T03:04:05Z"'
+  tk_jq "$dir" '.defaultBranch' '"main"'
+  tk_jq "$dir" '.mainSha' '"0123456789abcdef0123456789abcdef01234567"'
+  tk_jq "$dir" '.truncated' false
+  tk_jq "$dir" '[.issues[].number]' '[1,2,3,4,5,12,20,21,22]'
+  tk_jq "$dir" '.issues[0]' '{"number":1,"title":"Issue 1","url":"https://example.invalid/o/r/issues/1","state":"unplanned","milestone":1,"pr":null,"blockedBy":[],"waiting":false}'
+  tk_jq "$dir" '.counts' '{"unplanned":3,"planned":1,"approved":1,"pr-open":1,"done":2,"not-planned":1,"total":9,"waiting":1}'
+  tk_jq "$dir" '[.milestones[] | keys] | unique' '[["closed","dueOn","number","open","title","url"]]'
+}
+
+# tracker-state-precedence — one issue per adjacent pair of the precedence chain, each carrying
+# both labels; the higher-precedence state must win. Killed by 622-precedence.
+case_tracker_state_precedence() {
+  local dir; dir="$(mk_fixture tracker-state-precedence)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_i 10 '["impl-blocked","needs-human"]' null)" \
+    "$(tk_i 11 '["pr-open","impl-blocked"]' null)" \
+    "$(tk_i 12 '["plan-approved","pr-open"]' null)" \
+    "$(tk_i 13 '["no-plan","plan-approved"]' null)" \
+    "$(tk_i 14 '["plan-proposed","no-plan"]' null)" \
+    "$(tk_i 15 '["plan-proposed"]' null)" \
+    "$(tk_i 16 '["unrelated"]' null)" > "$dir/open.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.issues[] | select(.number >= 10 and .number <= 16) | .state]' '["needs-human","blocked","pr-open","approved","held","planned","unplanned"]'
+}
+
+# tracker-closed-states — a closed issue is done unless its stateReason is NOT_PLANNED, whatever
+# its labels say.
+case_tracker_closed_states() {
+  local dir; dir="$(mk_fixture tracker-closed-states)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_i 20 '["needs-human"]' 1 null CLOSED COMPLETED)" \
+    "$(tk_i 21 '["pr-open"]' 1 null CLOSED NOT_PLANNED)" \
+    "$(tk_i 23 '[]' 1 null CLOSED '')" > "$dir/closed.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.issues[] | select(.number >= 20) | [.number, .state]]' '[[20,"done"],[21,"not-planned"],[23,"done"]]'
+}
+
+# tracker-pr-mapping — the highest-numbered claude/<n>-... PR wins, a PR on another branch is
+# ignored, an issue without a PR has pr null.
+case_tracker_pr_mapping() {
+  local dir; dir="$(mk_fixture tracker-pr-mapping)"
+  build_tracker_env "$dir"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.issues[] | select(.number == 12) | .pr' '{"number":101,"url":"https://example.invalid/o/r/pull/101","state":"open"}'
+  tk_jq "$dir" '.issues[] | select(.number == 4) | .pr.number' 103
+  tk_jq "$dir" '.issues[] | select(.number == 20) | .pr.state' '"merged"'
+  tk_jq "$dir" '.issues[] | select(.number == 1) | .pr' null
+}
+
+# tracker-deps-waiting — blockedBy comes from the native dependency nodes; waiting is true iff a
+# blocker is open; a blockedBy list longer than its nodes marks the snapshot truncated.
+case_tracker_deps_waiting() {
+  local dir; dir="$(mk_fixture tracker-deps-waiting)"
+  build_tracker_env "$dir"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.issues[] | select(.number == 2) | [.waiting, .blockedBy]' '[true,[{"number":1,"url":"https://example.invalid/o/r/issues/1","open":true}]]'
+  tk_jq "$dir" '.issues[] | select(.number == 3) | [.waiting, .blockedBy]' '[false,[{"number":20,"url":"https://example.invalid/o/r/issues/20","open":false}]]'
+  tk_jq "$dir" '.truncated' false
+  tk_arr "$(tk_i 2 '[]' 1 '{"nodes":[],"totalCount":3}')" > "$dir/open.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.truncated' true
+}
+
+# tracker-milestone-counts — per-milestone open/closed counted from the issues listed, milestones
+# sorted by due date with nulls last, an issue with no milestone listed under milestone null.
+case_tracker_milestone_counts() {
+  local dir; dir="$(mk_fixture tracker-milestone-counts)"
+  build_tracker_env "$dir"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.milestones[] | [.number, .title, .dueOn, .open, .closed]]' '[[2,"v2","2026-11-01T00:00:00Z",1,1],[1,"v1",null,3,2]]'
+  tk_jq "$dir" '.milestones[0].url' '"https://example.invalid/o/r/milestone/2"'
+  tk_jq "$dir" '[.issues[] | select(.milestone == null) | .number]' '[5,12]'
+}
+
+# tk_query_failed NAME SITE — a failing query at SITE with a stale state.json already present:
+# result=skip, reason=query-failed site=SITE, exit 1, and the stale file removed. Killed by
+# 622-fail-open (issues-open) and 622-stale-file (every site).
+tk_query_failed() {
+  local dir; dir="$(mk_fixture "$1")"
+  build_tracker_env "$dir"
+  mkdir -p "$dir/work/.git/trail-blazer/tracker"
+  printf 'stale' > "$(tk_state_file "$dir")"
+  printf 'x' > "$dir/reject-$2"
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=query-failed site=%s' "$2")" ] || { __ok=0; __why="${__why}stdout: expected skip/$2, got $planning_out\n"; }
+  tk_no_state "$dir"
+}
+case_tracker_query_failed_repo() { tk_query_failed tracker-query-failed-repo repo; }
+case_tracker_query_failed_milestones() { tk_query_failed tracker-query-failed-milestones milestones; }
+case_tracker_query_failed_issues_open() { tk_query_failed tracker-query-failed-issues-open issues-open; }
+case_tracker_query_failed_issues_closed() { tk_query_failed tracker-query-failed-issues-closed issues-closed; }
+case_tracker_query_failed_prs() { tk_query_failed tracker-query-failed-prs prs; }
+case_tracker_query_failed_branch() { tk_query_failed tracker-query-failed-branch branch; }
+
+# tracker-too-large — about 1.2 MB of snapshot: skip with the byte count, exit 1, no state.json
+# (a stale one included). Killed by 622-size-cap.
+case_tracker_too_large() {
+  local dir; dir="$(mk_fixture tracker-too-large)"
+  build_tracker_env "$dir"
+  jq -n -c '([range(0;1200) | "x"] | join("")) as $t | [range(0;1000) | {number:(. + 100),title:$t,url:"https://example.invalid/x",state:"OPEN",stateReason:"",labels:[],milestone:null,blockedBy:{nodes:[],totalCount:0}}]' > "$dir/open.json"
+  mkdir -p "$dir/work/.git/trail-blazer/tracker"
+  printf 'stale' > "$(tk_state_file "$dir")"
+  run_tracker "$dir"
+  expect_rc 1
+  expect_floor_first "result=skip"
+  case "$planning_out" in
+    *"reason=too-large bytes="[0-9]*) : ;;
+    *) __ok=0; __why="${__why}missing too-large reason, got: $planning_out\n" ;;
+  esac
+  tk_no_state "$dir"
+}
+
+# tracker-truncated — 1000 open issues (the limit) set truncated true; so does a milestone's
+# closed list reaching its 500 limit.
+case_tracker_truncated() {
+  local dir; dir="$(mk_fixture tracker-truncated)"
+  build_tracker_env "$dir"
+  jq -n -c '[range(0;1000) | {number:(. + 100),title:"t",url:"https://example.invalid/x",state:"OPEN",stateReason:"",labels:[],milestone:null,blockedBy:{nodes:[],totalCount:0}}]' > "$dir/open.json"
+  run_tracker "$dir"
+  expect_rc 0
+  expect_floor_line "truncated=true"
+  tk_jq "$dir" '.truncated' true
+  build_tracker_env "$dir"
+  jq -n -c '[range(0;500) | {number:(. + 100),title:"t",url:"https://example.invalid/x",state:"CLOSED",stateReason:"COMPLETED",labels:[],milestone:{number:1,title:"v1",dueOn:null},blockedBy:{nodes:[],totalCount:0}}]' > "$dir/closed.json"
+  run_tracker "$dir"
+  expect_rc 0
+  expect_floor_line "truncated=true"
+  # the PR list reaching its read limit is not truncation
+  build_tracker_env "$dir"
+  jq -n -c '[range(0;200) | {number:(. + 1000),url:"https://example.invalid/o/r/pull/1",state:"OPEN",headRefName:"feature/x"}]' > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  expect_floor_line "truncated=false"
+}
+
+# tracker-milestone-numeric-title — gh is handed the milestone NUMBER: with milestone 1 titled "2"
+# and milestone 2 titled "1", each milestone still gets its own closed issues.
+case_tracker_milestone_numeric_title() {
+  local dir; dir="$(mk_fixture tracker-milestone-numeric-title)"
+  build_tracker_env "$dir"
+  printf '[{"number":1,"title":"2","html_url":"https://example.invalid/o/r/milestone/1","due_on":null,"state":"open"},{"number":2,"title":"1","html_url":"https://example.invalid/o/r/milestone/2","due_on":"2026-11-01T00:00:00Z","state":"open"}]\n' > "$dir/milestones.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.milestones[] | [.number, .closed]]' '[[2,1],[1,2]]'
+}
+
+# tracker-never-writes — a sync and a page run make only read gh calls, fire no booby-trapped
+# write command, and leave the working tree (everything outside .git/trail-blazer/tracker)
+# byte-identical.
+case_tracker_never_writes() {
+  local dir t line before after bad
+  dir="$(mk_fixture tracker-never-writes)"
+  build_tracker_env "$dir"
+  for t in touch cp ln chmod tee curl; do
+    floor_write_script "$dir" "$dir/tbin/$t" 'printf "%s\n" "${0##*/} $*" >> "__DIR__/.trap-calls"
+exit 1'
+  done
+  before="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md")"
+  run_tracker "$dir"
+  expect_rc 0
+  run_tracker "$dir" page
+  expect_rc 0
+  after="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md")"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}the working tree changed\n"; }
+  expect_no_log "$dir/.trap-calls"
+  bad=""
+  while IFS= read -r line; do
+    case "$line" in
+      "repo view "*|"issue list "*|"pr list "*) : ;;
+      "api repos/"*)
+        case " $line " in
+          *" -X "*|*" --method "*|*" -f "*|*" -F "*|*" --input "*|*" --field "*|*" --raw-field "*) bad="$bad [$line]" ;;
+        esac ;;
+      *) bad="$bad [$line]" ;;
+    esac
+  done < "$dir/.gh-calls"
+  [ -z "$bad" ] || { __ok=0; __why="${__why}non-read gh call(s):$bad\n"; }
+}
+
+# tracker-deterministic — the same inputs give a byte-identical state.json.
+case_tracker_deterministic() {
+  local dir first; dir="$(mk_fixture tracker-deterministic)"
+  build_tracker_env "$dir"
+  run_tracker "$dir"
+  expect_rc 0
+  first="$(cat "$(tk_state_file "$dir")")"
+  run_tracker "$dir"
+  expect_rc 0
+  [ "$first" = "$(cat "$(tk_state_file "$dir")")" ] || { __ok=0; __why="${__why}state.json differs between two runs\n"; }
+}
+
+# tracker-page — the page copy equals the template with @REPO_NAME@ replaced by the short repo
+# name, for a present, an absent and a malformed section alike; an unusable repo name skips.
+case_tracker_page() {
+  local dir page want; dir="$(mk_fixture tracker-page)"
+  build_tracker_env "$dir"
+  page="$dir/work/.git/trail-blazer/tracker/index.html"
+  want="$(sed 's#@REPO_NAME@#r#g' "$root/templates/tracker/index.html")"
+  run_tracker "$dir" page
+  expect_rc 0
+  expect_floor_first "tracker=present"
+  expect_floor_line "url=https://example.invalid/artifact/abc"
+  expect_floor_line "page=$(tk_real "$dir")/trail-blazer/tracker/index.html"
+  expect_floor_line "result=ready"
+  [ "$(cat "$page")" = "$want" ] || { __ok=0; __why="${__why}page is not the substituted template\n"; }
+  grep -qF -- "@REPO_NAME@" "$page" && { __ok=0; __why="${__why}a placeholder survived\n"; }
+  rm -f "$page"
+  printf '# P\n' > "$dir/work/CLAUDE.md"
+  run_tracker "$dir" page
+  expect_rc 0
+  expect_floor_first "tracker=absent"
+  [ "$(cat "$page")" = "$want" ] || { __ok=0; __why="${__why}absent: page is not the substituted template\n"; }
+  tk_claude "$dir" 'name: x'
+  rm -f "$page"
+  run_tracker "$dir" page
+  expect_rc 0
+  expect_floor_first "tracker=malformed"
+  expect_floor_line "reason=unknown-key"
+  [ -f "$page" ] || { __ok=0; __why="${__why}malformed: no page written\n"; }
+  printf '{"nameWithOwner":"o/bad name"}\n' > "$dir/repo.json"
+  run_tracker "$dir" page
+  expect_rc 1
+  expect_floor_line "reason=bad-repo-name"
+}
+
+# tracker-template-generic — the shipped page carries no project content or external resource,
+# and renders no db text through innerHTML.
+case_tracker_template_generic() {
+  local f="$root/templates/tracker/index.html" s
+  [ -f "$f" ] || { __ok=0; __why="${__why}template missing\n"; return; }
+  for s in 'http://' 'https://' 'localStorage' '<script src' 'innerHTML'; do
+    grep -qF -- "$s" "$f" && { __ok=0; __why="${__why}template contains $s\n"; }
+  done
+  grep -qF -- '@REPO_NAME@' "$f" || { __ok=0; __why="${__why}template lacks @REPO_NAME@\n"; }
+}
+
+# tracker-usage — an unknown argument, an extra argument, or no git repository is exit 2 with no
+# stdout.
+case_tracker_usage() {
+  local dir; dir="$(mk_fixture tracker-usage)"
+  build_tracker_env "$dir"
+  run_tracker "$dir" bogus
+  expect_rc 2
+  expect_empty_out
+  run_tracker "$dir" page extra
+  expect_rc 2
+  expect_empty_out
+  : > "$dir/not-a-repo"
+  run_tracker "$dir"
+  expect_rc 2
+  expect_empty_out
+  expect_no_log "$dir/.gh-calls"
+}
+
+# ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
   "untrusted-comment-no-revision|case_untrusted_no_revision|NONE comment after the plan: no revision, reported in untrusted_comments"
@@ -12829,6 +13368,33 @@ cases=(
   "floor-untrusted-text-fixed-prefix|case_floor_untrusted_text_fixed_prefix|#550: a newline or CR in a head branch, a check name or an added line never starts a line of its own — scalars are cleaned, check names JSON-escaped"
   "floor-positive-accounting|case_floor_positive_accounting|#550: pass needs both an empty fail list and a recorded pass for every required check, the lessons-only checks included"
   "floor-never-mutates|case_floor_never_mutates|#550: booby-trapped write commands never fire, the cwd listing is byte-identical, and only read-only gh and git calls are made"
+  "tracker-absent|case_tracker_absent|#622: no Tracker section: exactly tracker=absent, exit 0, no gh call, nothing created"
+  "tracker-no-claude-md|case_tracker_no_claude_md|#622: no CLAUDE.md at all: tracker=absent, exit 0, no gh call"
+  "tracker-malformed-no-fence|case_tracker_malformed_no_fence|#622: a Tracker section with no fenced block: tracker=malformed reason=no-fence, exit 1, no gh call"
+  "tracker-malformed-no-url|case_tracker_malformed_no_url|#622: a fence with no url line: reason=no-url"
+  "tracker-malformed-multiple-urls|case_tracker_malformed_multiple_urls|#622: two url lines: reason=multiple-urls"
+  "tracker-malformed-bad-url|case_tracker_malformed_bad_url|#622: a non-https url, or one with a space or quote: reason=bad-url"
+  "tracker-malformed-unknown-key|case_tracker_malformed_unknown_key|#622: a fence line that is not url: reason=unknown-key"
+  "tracker-sync-baseline|case_tracker_sync_baseline|#622: a sync prints the full stdout grammar in order and writes a compact state.json under the git common dir with every schema field"
+  "tracker-state-precedence|case_tracker_state_precedence|#622: each adjacent pair of the state precedence chain resolves to the higher state"
+  "tracker-closed-states|case_tracker_closed_states|#622: a closed issue is done, or not-planned for stateReason NOT_PLANNED, whatever its labels"
+  "tracker-pr-mapping|case_tracker_pr_mapping|#622: the highest-numbered claude/<n>- PR links to issue <n>; PRs on other branches are ignored"
+  "tracker-deps-waiting|case_tracker_deps_waiting|#622: native blockedBy nodes give blockedBy and waiting (true iff a blocker is open); a short node list marks the snapshot truncated"
+  "tracker-milestone-counts|case_tracker_milestone_counts|#622: milestone open/closed counts come from the listed issues, milestones sort by due date nulls last, no-milestone issues carry null"
+  "tracker-query-failed-repo|case_tracker_query_failed_repo|#622: a failing repo read skips with the site named, exit 1, and removes a stale state.json"
+  "tracker-query-failed-milestones|case_tracker_query_failed_milestones|#622: a failing milestones read skips, removes the stale state.json"
+  "tracker-query-failed-issues-open|case_tracker_query_failed_issues_open|#622: a failing open-issue list skips, removes the stale state.json, never writes a partial snapshot"
+  "tracker-query-failed-issues-closed|case_tracker_query_failed_issues_closed|#622: a failing closed-issue list skips, removes the stale state.json"
+  "tracker-query-failed-prs|case_tracker_query_failed_prs|#622: a failing PR list skips, removes the stale state.json"
+  "tracker-query-failed-branch|case_tracker_query_failed_branch|#622: a failing default-branch read skips, removes the stale state.json"
+  "tracker-too-large|case_tracker_too_large|#622: a snapshot over the byte cap skips with the byte count and leaves no state.json"
+  "tracker-truncated|case_tracker_truncated|#622: reaching the open-issue or per-milestone closed-issue limit sets truncated"
+  "tracker-never-writes|case_tracker_never_writes|#622: only read gh calls, no booby-trapped write command fires, the working tree is byte-identical"
+  "tracker-milestone-numeric-title|case_tracker_milestone_numeric_title|#622: gh is given the milestone number, so a numeric milestone title cannot select another milestone"
+  "tracker-deterministic|case_tracker_deterministic|#622: two runs over the same inputs write a byte-identical state.json"
+  "tracker-page|case_tracker_page|#622: page mode writes the template with @REPO_NAME@ replaced, for any section state; a bad repo name skips"
+  "tracker-template-generic|case_tracker_template_generic|#622: the shipped page has no external resource, localStorage or innerHTML, and keeps its @REPO_NAME@ placeholder"
+  "tracker-usage|case_tracker_usage|#622: an unknown or extra argument, or no git repository, is exit 2 with no stdout"
 )
 
 # MEASURED MUTANTS (#275/#281) — #281 replaced #275's exclusion-based $planC test

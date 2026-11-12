@@ -402,7 +402,7 @@ if [ -f "$root/CLAUDE.md" ]; then
   cm_lines="$(wc -l < "$root/CLAUDE.md" | tr -d '[:space:]')"
   cm_bytes="$(wc -c < "$root/CLAUDE.md" | tr -d '[:space:]')"
   if [ "$cm_lines" -gt 300 ] || [ "$cm_bytes" -gt 20000 ]; then
-    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's ten items themselves)"
+    wrn "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes — over the 300-line/20000-byte guideline; run the harness-setup skill's leanness audit to trim restatement (directory tours, framework defaults, formatter-enforced style — not the contract's items themselves)"
   else
     ok "CLAUDE.md size: $cm_lines lines / $cm_bytes bytes"
   fi

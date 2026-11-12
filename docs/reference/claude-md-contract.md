@@ -476,14 +476,22 @@ generic subagents need:
     these rules don't match, and **any doubt holds**. Only the merge pass's governance-path read (item 5) and the doctor's
     validation ever read this section; nothing else in the harness does.
 
+11. **Tracker** (optional) — a section titled exactly "Tracker" whose first fenced block holds one
+    line, `url: https://...`, the address of this repo's live tracker artifact (blank lines and `#`
+    comment lines are allowed; any other line is an unknown key). It is read by
+    `bin/tracker-sync.sh` and the `tracker` skill only: no section means no tracker, never an
+    error. A malformed section (`no-fence`, `no-url`, `multiple-urls`, `bad-url` or `unknown-key`)
+    makes each sync report `tracker=malformed` and skip. The doctor does not validate it. See
+    [tracker.md](tracker.md) for the page, the snapshot and the limits.
+
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
 contract above drowns in restatement of what the file system, manifests, and linter config
-already say. The ten items above are the floor, not a template to pad: leave out directory
+already say. The items above are the floor, not a template to pad: leave out directory
 tours, framework defaults, and formatter-enforced style, and keep the non-obvious — invariants,
 why-this-way decisions, traps a fresh reader would hit — instead. `check-harness.sh` turns "too
 much" into a mechanical proxy: it WARNs once `CLAUDE.md` passes 300 lines or 20,000 bytes,
-pointing at the harness-setup skill's leanness audit — not at the ten contract items themselves.
+pointing at the harness-setup skill's leanness audit — not at the contract items themselves.
 
 ## The LESSONS.md contract (project-owned)
 

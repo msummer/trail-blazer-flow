@@ -199,6 +199,8 @@ Tell the user the exact next steps and **why this order**:
    the **green verification baseline** (which couldn't exist before there was code).
 3. **`issue-planner`** on the rest of the backlog → the normal plan → implement → merge loop.
 
+Offer to create the repo's live tracker too (the `tracker` skill; private by default).
+
 Close with a one-line readiness statement: the repo is connected, the brief and CLAUDE.md are
 drafted (pending the user's commit), and the backlog is filed — ready for planning.
 

@@ -1185,6 +1185,92 @@
       "expect_fail": [
         "plan-stall-requires-stall-key"
       ]
+    },
+    {
+      "name": "622-precedence",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      elif any($l[]; . == $l_nh) then \"needs-human\"\n      elif any($l[]; . == $l_blk) then \"blocked\"\n      elif any($l[]; . == $l_pro) then \"pr-open\"\n",
+          "to": "      elif any($l[]; . == $l_pro) then \"pr-open\"\n      elif any($l[]; . == $l_nh) then \"needs-human\"\n      elif any($l[]; . == $l_blk) then \"blocked\"\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-state-precedence"
+      ]
+    },
+    {
+      "name": "622-fail-open",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "then q_fail issues-open; fi\n",
+          "to": "then :; fi\n"
+        },
+        {
+          "from": "|| q_fail issues-open\n",
+          "to": "|| true\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-query-failed-issues-open"
+      ]
+    },
+    {
+      "name": "622-stale-file",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "rm -f \"$dir/state.json\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "tracker-query-failed-repo",
+        "tracker-query-failed-milestones",
+        "tracker-query-failed-issues-open",
+        "tracker-query-failed-issues-closed",
+        "tracker-query-failed-prs",
+        "tracker-query-failed-branch",
+        "tracker-too-large"
+      ]
+    },
+    {
+      "name": "622-size-cap",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "if [ \"$bytes\" -gt \"$MAX_BYTES\" ]; then",
+          "to": "if false; then"
+        }
+      ],
+      "expect_fail": [
+        "tracker-too-large"
+      ]
+    },
+    {
+      "name": "622-absent-gh",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "absent) echo \"tracker=absent\"; exit 0 ;;",
+          "to": "absent) gh repo view --json nameWithOwner >/dev/null 2>&1; echo \"tracker=absent\"; exit 0 ;;"
+        }
+      ],
+      "expect_fail": [
+        "tracker-absent",
+        "tracker-no-claude-md"
+      ]
     }
   ]
 }

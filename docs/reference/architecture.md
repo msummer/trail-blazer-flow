@@ -25,7 +25,8 @@
 │   ├── issue-implementer/references/worktree-mode.md  # worktree-parallel procedure (read on demand)
 │   ├── issue-implementer/references/wording-fast-path.md  # verifier wording-only fix round (read on demand)
 │   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
-│   └── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
+│   ├── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
+│   └── tracker/SKILL.md          # optional live tracker: creates the artifact page and syncs it; orchestrating session only (#622)
 ├── bin/                          # on the Bash PATH when the plugin is enabled, on Claude Code — never on Codex (#408, ADR 0002 P5)
 │   ├── check-harness.sh           # mechanical preflight ("doctor"); safe to re-run any time
 │   ├── check-decision-record.sh   # scoped-autonomy: checks an issue body against a declared decision record
@@ -40,6 +41,7 @@
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
 │   ├── merge-floor.sh             # read-only, fail-closed merge floor for one PR: every mechanical check of the issue-cycle merge pass, one verdict + evidence (#550)
 │   ├── reserve-paths.sh           # read-only Autonomy reserve matcher: the diff's reserved paths for the verifier, and the doctor's --check validator + schema-path scan (#552)
+│   ├── tracker-sync.sh            # read-only projection of issue state, PRs, milestones and dependencies into one snapshot file for the tracker skill (#622)
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
 │   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427), a deduplicated needs-human tracking issue on failure (#428)
 │   └── cleanup-after-merge.sh     # post-merge sync + branch/label hygiene (--fix repairs labels)
@@ -56,7 +58,7 @@
 │   ├── doctor-tests.sh           # fixture-based negative-test harness for bin/check-harness.sh, bin/governance-paths.sh, bin/reserve-paths.sh, bin/codex-setup.sh, AND bin/codex-scheduled-run.sh (not run by the gate)
 │   ├── hook-tests.sh             # fixture-based negative-test harness for all five hooks/*.sh scripts, including Codex-shaped payload fixtures (#407) (not run by the gate)
 │   ├── cleanup-tests.sh          # fixture-based negative-test harness for bin/cleanup-after-merge.sh (not run by the gate)
-│   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh, bin/find-implementation-work.sh, bin/harness-status.sh AND bin/merge-floor.sh (not run by the gate)
+│   ├── planning-tests.sh         # fixture-based negative-test harness for bin/find-planning-work.sh, bin/find-implementation-work.sh, bin/harness-status.sh, bin/merge-floor.sh AND bin/tracker-sync.sh (not run by the gate)
 │   ├── lock-tests.sh             # fixture-based negative-test harness for bin/harness-lock.sh (not run by the gate)
 │   ├── stop-tests.sh             # fixture-based negative-test harness for bin/harness-stop.sh (not run by the gate)
 │   ├── mutant-driver.sh          # checked-in mutant driver: applies dev/mutants/*.json's recorded edits to a scratch copy and re-runs each record's suite (#359)
@@ -70,7 +72,8 @@
 │   └── dependabot.yml          # weekly github-actions update PRs, so the workflow's SHA pins don't age out
 └── templates/
     ├── repo-settings.json        # thin per-repo .claude/settings.json (permissions + marketplace + enabledPlugins)
-    └── codex.rules                # Codex rules template bin/codex-setup.sh installs per repo (#408)
+    ├── codex.rules                # Codex rules template bin/codex-setup.sh installs per repo (#408)
+    └── tracker/index.html         # the generic, db-driven tracker page the tracker skill publishes (#622)
 ```
 
 Skills are invoked with the plugin namespace (`/trail-blazer-flow:issue-planner`, …) or by natural

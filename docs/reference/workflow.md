@@ -357,7 +357,9 @@ audited in the report — in autonomous mode, item 9's serial merge train instea
 implementation and merge passes per issue) → a closing reconciliation, comparing the run's **dispatch ledger**
 against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
 outcome is escalated, never dropped; a degraded live read is escalated too, never reported
-clean), then a **per-issue summary table** and a two-halves report
+clean), then a best-effort **tracker sync** (the `tracker` skill; silent without a "Tracker"
+section, one skip line where the artifact tools are absent, see [tracker.md](tracker.md)), then a
+**per-issue summary table** and a two-halves report
 — *what the cycle did* and *what waits on the human* (plans to review, PRs to merge, blocked
 issues, and (#333, #346) untriaged follow-ups, counted in the total).
 It adds no authority beyond what CLAUDE.md delegates — it just removes the
