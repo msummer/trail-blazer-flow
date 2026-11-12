@@ -71,6 +71,8 @@ the run.
   unattended session it degrades silently instead of failing loudly. Run the inner command on its
   own, then paste its literal result into the next call (step 2e's collapse is the worked
   example).
+- **Never brief a subagent to wait on a process.** Its own long-running-commands constraint
+  governs; relay any command its report names as left running in step 3's summary.
 
 ## Resilient dispatch
 
