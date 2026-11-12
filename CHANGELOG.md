@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #619: the verifier gains a `wording` finding class; a fail whose every finding is `wording` gets
+  one budget-free, re-verified implementer fix round. On Codex, re-run `bin/codex-setup.sh`
+  (`agents/*.md` changed).
 - #530: worktree-parallel mode runs the per-issue stop check before each new issue takes a freed
   slot; on stop it launches nothing further and lets in-flight worktrees finish.
 

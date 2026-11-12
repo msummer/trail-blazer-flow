@@ -358,7 +358,8 @@ generic subagents need:
    - Every hard floor named in items 4 through 8 is unchanged; the mode only widens *which*
      section is read as present, never *what* a present section is allowed to authorize.
    - The kickback budget (see "Implementation" step 4 above) bounds how many times the verifier's
-     fail finding re-dispatches the implementer before the run takes the blocked path. The
+     fail finding re-dispatches the implementer before the run takes the blocked path. One
+     wording fast-path round (every finding `wording`) sits outside it, once per issue per run. The
      orchestrator never writes the fix itself; a spent budget always takes the blocked path,
      exactly like the fixed limit does without this section.
    - Auto-approval (item 4) is also evaluated on every run for each `plan-proposed` plan posted in
