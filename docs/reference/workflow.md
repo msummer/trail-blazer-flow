@@ -18,7 +18,8 @@ produces the first of each. The main session (no subagents):
 3. On approval, **connects GitHub** (creates or selects the repo, installs labels, lays down the
    thin `.claude/settings.json`), then emits the artifacts: `docs/PROJECT-BRIEF.md`, a drafted
    `CLAUDE.md`, and the **issue backlog whose first item is a walking skeleton** (project
-   skeleton + verification setup — the thing that later makes the baseline green).
+   skeleton + verification setup — the thing that later makes the baseline green), its
+   dependencies recorded as native GitHub issue dependencies.
 4. **Hands off:** plan+implement the skeleton issue first → run `harness-setup` to record the
    green baseline (which can't exist until there's code) → `issue-planner` on the rest.
 
