@@ -57,15 +57,16 @@
 # own governance-path classifier, bin/governance-paths.sh, run here by a FIXED path (same
 # precedent as bin/harness-version.sh) via its `--check` mode — is absent, declared (naming the
 # glob count), or malformed (naming the reason token); never FAILs, and never runs the classifier
-# against anything but this repo's own CLAUDE.md. The reserve and governance checks run only after
-# two shared contract-file checks, which run on --provider codex too: (#614, #617) a name check reads
+# against anything but this repo's own CLAUDE.md. The reserve check (both providers) and the
+# governance check (Claude only) run only after two shared contract-file checks, which run on
+# --provider codex too: (#614, #617) a name check reads
 # `git ls-files` — a root-level entry that is a case variant of claude.md with none named exactly
 # CLAUDE.md (which a case-insensitive filesystem opens as CLAUDE.md anyway, while the merge floor and
 # the reserve match read only the exact name) is a FAIL naming the `git mv`, a failed listing a WARN;
 # and (#613), when HEAD's tree records CLAUDE.md as a symlink, a probe runs $script_dir/reserve-paths.sh
 # by a FIXED path in diff mode with HEAD's commit id as both arguments — a link its one-hop read rejects
-# is a FAIL naming the link text and the reason, an inconclusive probe a WARN. Any of these skips both
-# checks, so neither can PASS. An untracked CLAUDE.md is not reported, with or without commits; an
+# is a FAIL naming the link text and the reason, an inconclusive probe a WARN. Any of these skips the
+# reserve check on both providers, and the governance check too on Claude, so neither can PASS. An untracked CLAUDE.md is not reported, with or without commits; an
 # uncommitted or staged-only link, or a repo with no commits, is not probed.
 #
 # --provider codex (#410, default: claude) runs a different, additive check set after the shared
@@ -74,7 +75,8 @@
 # floor (top-level CODEX_MIN_VERSION), whitespace in the plugin/repo path, bin/codex-setup.sh
 # --check drift (#408), a bounded codex app-server hooks/list exchange that only ever REPORTS
 # hook trust (auto-trusting would defeat Codex's own review gate — it never writes trust state),
-# and a manual-merge report (merge autonomy does not exist on Codex). The shared baseline and
+# a manual-merge report (merge autonomy does not exist on Codex), and the same Autonomy reserve
+# validator the Claude doctor runs (#627; governance paths stay Claude-only). The shared baseline and
 # branch-protection checks below still run afterward, unchanged except that no protection found —
 # neither a classic protection document nor any qualifying ruleset rule for the branch — is a FAIL
 # rather than a WARN on Codex. See docs/reference/codex.md's
@@ -381,11 +383,10 @@ fi
 # --- CLAUDE.md ----------------------------------------------------------------
 # $cm_name_ok is true until a contract-file check below (the name check, #614/#617, or the HEAD
 # symlink probe, #613) finds the file unreadable by the merge floor and the implementer or cannot
-# tell; the Claude-only reserve and governance checks read it and skip when it is false, so neither
-# can PASS. $cm_skip_note says so in a contract-file line, on Claude only: the Codex doctor has
-# neither check.
+# tell; the reserve check (both providers) and the governance check (Claude only) read it and skip
+# when it is false, so neither can PASS. $cm_skip_note says so in a contract-file line.
 cm_name_ok=true
-cm_skip_note=""
+cm_skip_note="; this doctor skips its reserve check until it is fixed"
 if [ "$provider" = claude ]; then
   cm_skip_note="; this doctor skips its reserve and governance checks until it is fixed"
 fi
@@ -530,12 +531,74 @@ PROTECTION_CHECKS_WARN_STEM="branch protection: zero required status check conte
 CODEX_MIN_VERSION="0.156.1"
 CODEX_HOOKS_LIST_WAIT=15
 
+# reserve_check AUTO — validates the optional "Autonomy reserve" section (README item 7) that the
+# implementer orchestrator hands to bin/reserve-paths.sh before every verifier dispatch, on both
+# providers, and, only when AUTO is true (plan auto-approval active — the caller decides what that
+# means on its provider), reports the repo's tracked schema paths that no reserve glob covers (an
+# advice-only WARN) or that a `not reserved:` line leaves out on purpose (a PASS). Runs only when
+# the shared contract-file checks (name and symlink, #614/#613) confirmed the file, and only when
+# the section exists or AUTO is true, by a FIXED path, $script_dir/reserve-paths.sh --check
+# "$root/CLAUDE.md" — same precedent as bin/harness-version.sh — never a path derived from repo
+# content. Missing, non-executable, a non-zero exit, or a first line outside the three shapes the
+# script documents is the same "could not validate" WARN, never a FAIL — this doctor never blocks
+# a run on this. A malformed section is a WARN whether or not AUTO is true: every implementation
+# stops before verification until it is fixed. The script's output is only captured and tested,
+# never executed or expanded. Both call sites guarantee $root/CLAUDE.md exists; this reads no
+# Claude-only variable, so it is safe under `set -u` on the Codex path.
+reserve_check() {
+  local res_auto="$1" res_has=false
+  has_policy_section "Autonomy reserve" && res_has=true
+  if $cm_name_ok && { $res_has || $res_auto; }; then
+    res_script="$script_dir/reserve-paths.sh"
+    res_out=""
+    res_valid=false
+    if [ -x "$res_script" ] && res_out="$("$res_script" --check "$root/CLAUDE.md" 2>/dev/null)"; then
+      res_first="$(printf '%s\n' "$res_out" | head -1)"
+      case "$res_first" in
+        absent)
+          res_valid=true ;;
+        declared\ [0-9]*\ [0-9]*)
+          res_valid=true
+          res_nums="${res_first#declared }"
+          ok "autonomy reserve: ${res_nums%% *} glob(s), ${res_nums#* } 'not reserved:' line(s)" ;;
+        malformed\ *)
+          res_bad="${res_first#malformed }"
+          case "$res_bad" in
+            *\ *) res_bad="${res_bad%% *}: ${res_bad#* }" ;;
+          esac
+          wrn "autonomy reserve: section is malformed ($res_bad) — every implementation stops before verification until it's fixed (README's CLAUDE.md contract, item 7)" ;;
+        *)
+          wrn "autonomy reserve: could not validate" ;;
+      esac
+    else
+      wrn "autonomy reserve: could not validate"
+    fi
+
+    if $res_valid && $res_auto; then
+      res_schema="$(printf '%s\n' "$res_out" | sed -n 's/^schema: //p')"
+      res_ack="$(printf '%s\n' "$res_out" | sed -n 's/^acknowledged: //p')"
+      if [ -n "$res_schema" ]; then
+        res_n="$(printf '%s\n' "$res_schema" | grep -c .)"
+        res_more=""; [ "$res_n" -gt 6 ] && res_more=" (+$((res_n-6)) more)"
+        res_list="$(printf '%s\n' "$res_schema" | head -6 | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }')"
+        wrn "autonomy reserve: $res_n schema path(s) outside the reserve while plan auto-approval is on: $res_list$res_more — a plan that changes one is approved on its own word; add the path to the 'Autonomy reserve' section, or add a 'not reserved: <glob>' line there to leave it out on purpose (advice only, README's CLAUDE.md contract, item 7)"
+      fi
+      if [ -n "$res_ack" ]; then
+        res_n="$(printf '%s\n' "$res_ack" | grep -c .)"
+        res_more=""; [ "$res_n" -gt 6 ] && res_more=" (+$((res_n-6)) more)"
+        res_list="$(printf '%s\n' "$res_ack" | head -6 | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }')"
+        ok "autonomy reserve: $res_n schema path(s) left out of the reserve on purpose: $res_list$res_more"
+      fi
+    fi
+  fi
+}
+
 # --- Codex checks (#410) ---------------------------------------------------------------------
 # --provider codex runs this block instead of the settings/toolchain/policy-activation checks
 # wrapped in the Claude-only `if` just below: a Codex version floor, plugin/repo path whitespace,
 # bin/codex-setup.sh's own --check drift, a bounded codex app-server hooks/list exchange that
 # only ever REPORTS hook trust (never grants it — auto-trusting would defeat Codex's own review
-# gate), and a manual-merge report. merge_effective stays false: the branch-protection section
+# gate), a manual-merge report, and the shared reserve_check (#627). merge_effective stays false: the branch-protection section
 # further down reads it (skipping the strictness sub-checks, which are merge-autonomy-gated), the
 # Claude-only hoist that normally sets it is skipped on Codex, and merge autonomy doesn't exist
 # on Codex at all.
@@ -740,6 +803,17 @@ EOF
     ok "merge: manual on Codex — $cx_merge_names does not apply here; merge autonomy doesn't exist on Codex, so every PR merge is manual"
   else
     ok "merge: manual on Codex — every PR merge is manual"
+  fi
+
+  # --- autonomy reserve (#627) --- the implementer runs reserve-paths.sh on Codex too, so the
+  # same validator runs here. `mode: autonomous` is read as absent on Codex, so only a declared
+  # "Plan auto-approval policy" section turns the schema advice on. Governance paths are not
+  # validated: their only reader is the merge pass, which never runs on Codex. Never read
+  # $autonomy_on here — it is assigned only inside the Claude block, and `set -u` would abort.
+  if [ -f "$root/CLAUDE.md" ]; then
+    cx_auto_approval=false
+    has_policy_section "Plan auto-approval policy" && cx_auto_approval=true
+    reserve_check "$cx_auto_approval"
   fi
 fi
 
@@ -1455,66 +1529,14 @@ EOF
     fi
   fi
 
-  # --- autonomy reserve (#552) --- validates the optional "Autonomy reserve" section (README
-  # item 7) that the implementer orchestrator hands to bin/reserve-paths.sh before every verifier
-  # dispatch, and, only while plan auto-approval is active (a "Plan auto-approval policy" section,
-  # or `mode: autonomous`), reports the repo's tracked schema paths that no reserve glob covers
-  # (an advice-only WARN) or that a `not reserved:` line leaves out on purpose (a PASS). Runs only
-  # when the shared contract-file checks (name and symlink, #614/#613) confirmed the file, and only when the section exists or
-  # auto-approval is active, by a FIXED path,
-  # $script_dir/reserve-paths.sh --check "$root/CLAUDE.md" — same precedent as the governance
-  # check below — never a path derived from repo content. Missing, non-executable, a non-zero
-  # exit, or a first line outside the three shapes the script documents is the same "could not
-  # validate" WARN, never a FAIL — this doctor never blocks a run on this. A malformed section is a
-  # WARN whether or not auto-approval is active: every implementation stops before verification
-  # until it is fixed. The script's output is only captured and tested, never executed or expanded.
+  # --- autonomy reserve (#552) --- validated by reserve_check (defined above the Codex block, shared
+  # with --provider codex); here `mode: autonomous` or a "Plan auto-approval policy" section turns the
+  # schema advice on.
   auto_approval_on=false
   if $autonomy_on || has_policy_section "Plan auto-approval policy"; then
     auto_approval_on=true
   fi
-  if $cm_name_ok && { $has_reserve || $auto_approval_on; }; then
-    res_script="$script_dir/reserve-paths.sh"
-    res_out=""
-    res_valid=false
-    if [ -x "$res_script" ] && res_out="$("$res_script" --check "$root/CLAUDE.md" 2>/dev/null)"; then
-      res_first="$(printf '%s\n' "$res_out" | head -1)"
-      case "$res_first" in
-        absent)
-          res_valid=true ;;
-        declared\ [0-9]*\ [0-9]*)
-          res_valid=true
-          res_nums="${res_first#declared }"
-          ok "autonomy reserve: ${res_nums%% *} glob(s), ${res_nums#* } 'not reserved:' line(s)" ;;
-        malformed\ *)
-          res_bad="${res_first#malformed }"
-          case "$res_bad" in
-            *\ *) res_bad="${res_bad%% *}: ${res_bad#* }" ;;
-          esac
-          wrn "autonomy reserve: section is malformed ($res_bad) — every implementation stops before verification until it's fixed (README's CLAUDE.md contract, item 7)" ;;
-        *)
-          wrn "autonomy reserve: could not validate" ;;
-      esac
-    else
-      wrn "autonomy reserve: could not validate"
-    fi
-
-    if $res_valid && $auto_approval_on; then
-      res_schema="$(printf '%s\n' "$res_out" | sed -n 's/^schema: //p')"
-      res_ack="$(printf '%s\n' "$res_out" | sed -n 's/^acknowledged: //p')"
-      if [ -n "$res_schema" ]; then
-        res_n="$(printf '%s\n' "$res_schema" | grep -c .)"
-        res_more=""; [ "$res_n" -gt 6 ] && res_more=" (+$((res_n-6)) more)"
-        res_list="$(printf '%s\n' "$res_schema" | head -6 | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }')"
-        wrn "autonomy reserve: $res_n schema path(s) outside the reserve while plan auto-approval is on: $res_list$res_more — a plan that changes one is approved on its own word; add the path to the 'Autonomy reserve' section, or add a 'not reserved: <glob>' line there to leave it out on purpose (advice only, README's CLAUDE.md contract, item 7)"
-      fi
-      if [ -n "$res_ack" ]; then
-        res_n="$(printf '%s\n' "$res_ack" | grep -c .)"
-        res_more=""; [ "$res_n" -gt 6 ] && res_more=" (+$((res_n-6)) more)"
-        res_list="$(printf '%s\n' "$res_ack" | head -6 | awk 'NR > 1 { printf ", " } { printf "%s", $0 } END { print "" }')"
-        ok "autonomy reserve: $res_n schema path(s) left out of the reserve on purpose: $res_list$res_more"
-      fi
-    fi
-  fi
+  reserve_check "$auto_approval_on"
 
   # --- governance paths (#331, folds in #330) --- validates the optional "Governance paths"
   # section (README item 10) that the merge floor's governance-path classifier,

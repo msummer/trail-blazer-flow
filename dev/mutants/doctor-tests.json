@@ -2332,6 +2332,54 @@
       "expect_fail": [
         "contract-link-unchecked"
       ]
+    },
+    {
+      "name": "627-reserve-codex-off",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-reserve-",
+      "edits": [
+        {
+          "from": "    reserve_check \"$cx_auto_approval\"\n",
+          "to": "    :\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-reserve-malformed",
+        "codex-doctor-reserve-declared",
+        "codex-doctor-reserve-schema"
+      ]
+    },
+    {
+      "name": "627-reserve-codex-auto-always",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-reserve-",
+      "edits": [
+        {
+          "from": "    reserve_check \"$cx_auto_approval\"\n",
+          "to": "    reserve_check true\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-reserve-schema"
+      ]
+    },
+    {
+      "name": "627-reserve-gate-off",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-contract-",
+      "edits": [
+        {
+          "from": "  if $cm_name_ok && { $res_has || $res_auto; }; then\n",
+          "to": "  if { $res_has || $res_auto; }; then\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-contract-case",
+        "codex-doctor-contract-symlink"
+      ]
     }
   ]
 }

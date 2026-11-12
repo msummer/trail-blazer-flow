@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #627: `check-harness.sh --provider codex` now validates the Autonomy reserve section (malformed
+  WARN; schema advice under a Plan auto-approval policy), skipped like Claude's after a
+  contract-file finding; governance paths stay Claude-only.
 - #623: `issue-cycle` "full auto": one human-invoked run plans, builds in parallel worktrees and
   merges a named milestone or issue list under the existing floors (`references/full-auto.md`);
   never unattended; Codex: scope only.
