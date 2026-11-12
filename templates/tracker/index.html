@@ -75,6 +75,10 @@ a { color: var(--accent); }
 .badge[data-s="pr-open"], .badge[data-s="approved"] { color: var(--active); border-color: var(--active); }
 .badge[data-s="blocked"], .badge[data-s="needs-human"] { color: var(--bad); border-color: var(--bad); }
 .badge[data-s="held"], .badge[data-s="waiting"], .badge[data-s="in-progress"], .badge[data-s="unconfirmed"] { color: var(--wait); border-color: var(--wait); }
+.counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
+.counts .badge { font-size: 0.9rem; padding: 3px 10px; white-space: nowrap; }
+.counts .badge b { font-size: 1.05rem; margin-right: 4px; }
+.badge[data-s="total"] { color: var(--fg); border-color: var(--fg); }
 .bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; margin: 6px 0; }
 .bar > span { display: block; height: 100%; background: var(--done); }
 button { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
@@ -122,6 +126,13 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     b.setAttribute("data-s", KNOWN.indexOf(s) >= 0 ? s : "other");
     return b;
   }
+  function countChip(k, n) {
+    var b = el("span", "badge");
+    b.setAttribute("data-s", k === "total" ? "total" : (KNOWN.indexOf(k) >= 0 ? k : "other"));
+    b.appendChild(el("b", null, String(n)));
+    b.appendChild(document.createTextNode(" " + k));
+    return b;
+  }
   function docExists(d) { return typeof d.exists === "function" ? d.exists() : !!d.exists; }
   function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
 
@@ -167,8 +178,15 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     if (h.truncated) { meta.appendChild(el("span", "stale", "truncated")); }
     box.appendChild(meta);
     var c = h.counts || {};
-    var parts = Object.keys(c).map(function (k) { return k + " " + c[k]; });
-    box.appendChild(el("p", "muted", parts.join(" | ")));
+    var ORDER = ["total", "needs-human", "blocked", "pr-open", "approved", "planned", "held", "unplanned", "waiting", "done", "not-planned"];
+    var keys = ORDER.filter(function (k) { return Object.prototype.hasOwnProperty.call(c, k); });
+    Object.keys(c).sort().forEach(function (k) { if (ORDER.indexOf(k) < 0) { keys.push(k); } });
+    var counts = el("div", "counts");
+    keys.forEach(function (k) {
+      if (k !== "total" && num(c[k]) === 0) { return; }
+      counts.appendChild(countChip(k, num(c[k])));
+    });
+    box.appendChild(counts);
     return box;
   }
 

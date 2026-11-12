@@ -36,14 +36,15 @@ in this session` and stop. Nothing here ever blocks, fails or reorders a cycle.
 1. Run `tracker-sync.sh`. `tracker=absent` (exit 0) → stop silently. Any other outcome except exit 0
    with `result=ready` (exit 1 or 2 included) → print `tracker: skipped — <first stderr or reason=
    line>`, push nothing and stop.
-2. `ArtifactData` `get` with the `url=`, collection `harness`, doc `state` and `out_dir` = the
-   printed `dir=`. Take the doc's `version` from the result. A not-found doc is the first write
-   (no `if_version`). If a found doc shows no version, print
-   `tracker: skipped — could not read the snapshot version` and stop; never read the snapshot
-   inline.
+2. `ArtifactData` `get` with the `url=`, collection `harness`, doc `state` and `out_dir` = your
+   session's scratch directory, never the printed `dir=` or anything under `.git/` (the platform
+   refuses it). Take `version` from the get result only, never from a saved file. A not-found doc
+   is the first write (no `if_version`). No scratch directory, a get error, or a found doc with no
+   version → print `tracker: skipped — <no scratch directory|the error|could not read the
+   snapshot version>` and stop; never read the snapshot inline or `get` without `out_dir`.
 3. `ArtifactData` `batch` with one entry `{op: set, collection: harness, doc_id: state,
-   file_path: <the printed file=>, if_version: <version>}`. On a version conflict re-get and
-   re-send once; any other error prints `tracker: skipped — <error>` and stops.
+   file_path: <the printed file=>, if_version: <version>}`. On a version conflict re-get as
+   in step 2 and re-send once; any other error prints `tracker: skipped — <error>` and stops.
 4. Report `tracker: synced <issues> issues, <milestones> milestones at <checked=> — <url>`, then
    People read-back.
 
