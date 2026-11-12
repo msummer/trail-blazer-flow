@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #605: agent-boundary's deploy rule lets the implementer and verifier run a fixed table of local commands
+  (supabase start/status/stop/db reset/…, terraform fmt/validate, helm lint/template, wrangler dev/types),
+  bare or through a launcher, unless the command names a remote flag, an expansion or a prefix word.
 - #627: `check-harness.sh --provider codex` now validates the Autonomy reserve section (malformed
   WARN; schema advice under a Plan auto-approval policy), skipped like Claude's after a
   contract-file finding; governance paths stay Claude-only.

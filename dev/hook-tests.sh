@@ -8174,8 +8174,8 @@ case_ab_optvalscan_noop_flood() {
 }
 
 # --- hooks/agent-boundary.sh: deploy and cloud CLIs (#551) --------------------------------------------
-# A DEPLOY_COMMANDS entry is denied whatever its subcommand: as the command word, as the word a LAUNCH_WORDS
-# launcher hands on to, or in a segment tail the scan cannot follow. After npm, pnpm, yarn or bun, a script
+# A DEPLOY_COMMANDS entry outside the DEPLOY_CARVE_OUTS table (#605) is denied: as the command word, as the
+# word a LAUNCH_WORDS launcher hands on to, or in a segment tail the scan cannot follow. After npm, pnpm, yarn or bun, a script
 # name containing "deploy" denies too, and package.json is never read. Case names carry "ab-deploy-" so
 # `bash dev/hook-tests.sh ab-deploy-` runs the family. A deny row needs no registry record: the base hook
 # allows every one, so each shows on its own that the rule can fail. The no-opinion and precedence rows pass
@@ -8189,6 +8189,28 @@ case_ab_optvalscan_noop_flood() {
 #   instead of stopping there, so npm install stripe and npx vitest run stripe deny (ab-deploy-noop-controls).
 # mutant:551-ab-deploy-order — dep_check prints its -deploy- finding at once instead of leaving it to the
 #   last END block, so a deploy deny comes before a later gh, git or .claude finding (ab-deploy-deny-precedence).
+# Carve-out rows (#605): an allow row fails on a base hook that denies every listed CLI, so it needs no record;
+# these records pin the deny rows.
+# mutant:605-ab-deploy-carve-any — the table lookup accepts any subcommand word after a listed CLI, so
+#   supabase db push and terraform plan are carved (ab-deploy-carve-deny-sub).
+# mutant:605-ab-deploy-carve-need — the required-flag check is skipped, so supabase gen types without --local
+#   is carved (ab-deploy-carve-deny-sub).
+# mutant:605-ab-deploy-carve-prefix — the prefix-word flag is ignored, so sudo supabase start and xargs
+#   supabase db reset are carved (ab-deploy-carve-deny-sub).
+# mutant:605-ab-deploy-carve-run — the package-script route is not recognised, so npm run supabase start is
+#   carved (ab-deploy-carve-deny-sub).
+# mutant:605-ab-deploy-carve-bun — bare bun <cli> is not treated as bun run, so bun supabase start and
+#   npx bun supabase db reset are carved (ab-deploy-carve-deny-sub).
+# mutant:605-ab-deploy-veto-off — the remote-flag veto is never recorded, so supabase db reset --linked is
+#   allowed (ab-deploy-carve-deny-veto).
+# mutant:605-ab-deploy-veto-quote — the veto copy keeps quote characters, so a quote-split --lin"ked" is
+#   allowed (ab-deploy-carve-deny-veto).
+# mutant:605-ab-deploy-veto-squote — the veto copy keeps single quotes, so a quote-split --lin'ked' is
+#   allowed (ab-deploy-carve-deny-veto).
+# mutant:605-ab-deploy-veto-brace — the brace veto is dropped, so a brace-expanded --linke{d,d} is allowed
+#   (ab-deploy-carve-deny-veto).
+# mutant:605-ab-deploy-veto-expansion — the dollar-sign and backtick veto is dropped, so supabase db reset
+#   $FLAGS is allowed (ab-deploy-carve-deny-veto).
 abd_form=full
 abd_cwd=""
 abd_pathval=""
@@ -8258,7 +8280,7 @@ case_ab_deploy_deny_direct() {
   fi
   for role in implementer verifier; do
     while IFS= read -r entry; do
-      abd_deny "$role" "$entry" "$entry" "$entry status --json" "sudo $entry"
+      abd_deny "$role" "$entry" "$entry" "$entry apply --json" "sudo $entry"
     done <<EOF
 $list
 EOF
@@ -8401,6 +8423,97 @@ case_ab_deploy_deny_codex() {
   abd_noop '' 'vercel deploy --prod'
   abd_form=full
 }
+# The carve-out table (#605): each DEPLOY_CARVE_OUTS row, its trailing arguments, a path, a chain and both
+# other payload shapes get no opinion for both roles. No row holds a dollar sign or a backtick (the veto).
+case_ab_deploy_carve_allow() {
+  local role
+  abd_cwd=""; abd_pathval=""
+  for role in implementer verifier; do
+    abd_form=full
+    abd_noop "$role" 'supabase start' 'supabase status' 'supabase stop' 'supabase db reset' 'supabase db diff' \
+      'supabase db lint' 'supabase test db' 'supabase migration new add_users' \
+      'supabase gen types typescript --local' 'terraform fmt' 'terraform validate' 'helm lint ./chart' \
+      'helm template ./chart' 'wrangler dev' 'wrangler types' \
+      'supabase status -o env' 'supabase stop --no-backup' 'supabase db reset --local' \
+      'supabase db diff -f add_users' 'supabase gen types --lang=typescript --local > src/db.ts' \
+      'terraform fmt -check -recursive' 'terraform validate -json' 'wrangler dev --port 8787' \
+      './node_modules/.bin/supabase start' 'supabase start && npm test' 'supabase db reset; supabase test db'
+    abd_form=bare
+    abd_noop "$role" 'supabase start'
+    abd_form=codex
+    abd_noop "$role" 'supabase status'
+  done
+  abd_form=full
+}
+# The same table through every launcher route the dep_check read follows, past a version marker and dash options.
+case_ab_deploy_carve_launcher() {
+  local role
+  abd_form=full; abd_cwd=""; abd_pathval=""
+  for role in implementer verifier; do
+    abd_noop "$role" 'npx supabase start' 'npx supabase@latest status' 'npx -y supabase db reset' \
+      'pnpm supabase test db' 'pnpm exec supabase db lint' 'pnpm dlx supabase gen types typescript --local' \
+      'yarn supabase stop' 'bunx supabase migration new x' 'npm exec -- supabase db diff' 'npx wrangler dev' \
+      'pnpm wrangler types' 'bunx supabase start' 'bun x supabase start' 'uvx supabase start'
+  done
+}
+# Everything outside the table keeps today's reason (blocked: <entry>): other subcommands, a bare CLI, a
+# missing --local, an option before the subcommand, a prefix word, a lost tail, the package-script route, and a
+# non-carved hit beside a carved one.
+case_ab_deploy_carve_deny_sub() {
+  local role
+  abd_form=full; abd_cwd=""; abd_pathval=""
+  for role in implementer verifier; do
+    abd_deny "$role" supabase 'supabase' 'supabase db push' 'supabase functions deploy hello' 'supabase link' \
+      'supabase login' 'supabase secrets set A=1' 'supabase secrets list' 'supabase migration list' \
+      'supabase migration up' 'supabase db' 'supabase db start' 'supabase gen types typescript' \
+      'supabase gen types typescript --local=false' 'supabase --debug start' 'sudo supabase start' \
+      'xargs supabase db reset' 'env X=1 supabase start' 'time supabase status' 'nohup supabase start' \
+      'bash -c "supabase start"' 'X="a b" supabase start' 'npx supabase db push' 'pnpm exec supabase link' \
+      'supabase start && supabase db push' 'npm run supabase start' 'pnpm run supabase start' \
+      'npm run-script supabase start' 'bun supabase start' 'npx bun supabase db reset' 'pipx run supabase start' 'yarn run supabase start' 'bun run supabase start' 'sudo npx supabase start'
+    abd_deny "$role" terraform 'terraform plan' 'terraform apply' 'terraform init' 'terraform destroy' \
+      'terraform -chdir=infra validate'
+    abd_deny "$role" helm 'helm install x ./chart' 'helm upgrade x ./chart'
+    abd_deny "$role" wrangler 'wrangler deploy' 'wrangler d1 execute db --command x' 'wrangler secret put X' \
+      'npx wrangler deploy'
+    abd_deny "$role" vercel 'vercel dev' 'supabase start; vercel deploy'
+    abd_deny "$role" kubectl 'kubectl get pods'
+  done
+}
+# The veto: a DEPLOY_REMOTE_FLAGS member anywhere in the command (read from the hook), however spelled or
+# placed, or a dollar sign, a backtick or a brace, turns a carved row into (blocked: <cli> with <veto>); a git, gh or
+# .claude finding keeps its own reason.
+case_ab_deploy_carve_deny_veto() {
+  local role flags f
+  abd_form=full; abd_cwd=""; abd_pathval=""
+  flags="$(sed -n 's/^DEPLOY_REMOTE_FLAGS="\(.*\)"$/\1/p' "$boundary")"
+  if [ -z "$flags" ]; then
+    __ok=0; __why="${__why}could not read DEPLOY_REMOTE_FLAGS from the hook\n"; return
+  fi
+  for role in implementer verifier; do
+    abd_deny "$role" 'supabase with --linked' 'supabase db reset --linked' 'supabase db reset --LINKED' \
+      'supabase db reset --lin"ked"' 'supabase db reset --lin\ked' "supabase db reset --lin'ked'" 'supabase start; echo --linked' \
+      'echo --linked
+supabase start' 'supabase start
+echo --linked' 'npx supabase db reset --linked'
+    abd_deny "$role" 'supabase with --db-url' 'supabase db reset --db-url postgres://u@h/db' \
+      'supabase test db --db-url=postgres://u@h/db'
+    abd_deny "$role" 'supabase with --project-ref' 'supabase start --project-ref abc'
+    abd_deny "$role" 'wrangler with --prod' 'wrangler dev --prod'
+    abd_deny "$role" 'supabase with --prod' 'supabase db reset --production'
+    abd_deny "$role" 'supabase with --project-id' 'supabase gen types typescript --local --project-id abc'
+    abd_deny "$role" 'wrangler with --remote' 'wrangler dev --remote'
+    abd_deny "$role" 'helm with --validate' 'helm template ./chart --validate'
+    for f in $flags; do
+      abd_deny "$role" "supabase with $f" "supabase status $f"
+    done
+    abd_deny "$role" 'supabase with $' 'supabase db reset $FLAGS' 'supabase db reset $(cat flags.txt)' \
+      'supabase start && echo $?'
+    abd_deny "$role" 'supabase with {' 'supabase db reset --linke{d,d}' 'supabase db reset --{linked,debug}'
+    abd_deny "$role" 'supabase with `' 'supabase db reset `cat flags.txt`'
+    abx_deny "$role" gh 'supabase start --linked && gh pr merge 5'
+  done
+}
 # The hook only reads the command as text: a booby-trapped PATH holding the launchers, the package managers
 # and the listed CLIs they would run is never touched, on a deny through a launcher, a deny by script name and
 # a no-opinion package-manager call.
@@ -8408,7 +8521,7 @@ case_ab_deploy_never_executes() {
   local trapdir="$tmpbase/trapbin-abd" sentinel="$tmpbase/sentinel-abd" bin
   mkdir -p "$trapdir"
   rm -f "$sentinel"
-  for bin in git gh rm npm npx pnpm pnpx yarn bun bunx uvx pipx node vercel wrangler aws; do
+  for bin in git gh rm npm npx pnpm pnpx yarn bun bunx uvx pipx node vercel wrangler aws supabase terraform helm; do
     {
       printf '#!%s\n' "$bash_bin"
       printf 'touch "%s"\n' "$sentinel"
@@ -8420,6 +8533,8 @@ case_ab_deploy_never_executes() {
   abd_deny implementer vercel 'npx vercel deploy'
   abd_deny implementer 'package script deploy' 'npm run deploy'
   abd_noop implementer 'npm test'
+  abd_noop implementer 'npx supabase start' 'supabase db reset'
+  abd_deny implementer 'supabase with --linked' 'supabase db reset --linked'
   abd_pathval=""
   [ ! -e "$sentinel" ] || { __ok=0; __why="${__why}sentinel file present — the boundary invoked something on the booby-trapped PATH\n"; }
 }
@@ -10864,6 +10979,10 @@ cases=(
   "ab-deploy-noop-controls|case_ab_deploy_noop_controls|no opinion: npm test, a script not named for deploy, an install argument naming a listed CLI (also with an option before the subcommand), a read of a file named for one, a plan-mode turn, an Explore agent and the main session, with and without a package.json whose bodies all name vercel deploy"
   "ab-deploy-deny-precedence|case_ab_deploy_deny_precedence|deny: a git, gh or .claude finding in the same command as a deploy keeps its own reason, in either order"
   "ab-deploy-deny-codex|case_ab_deploy_deny_codex|deny a subagent and no opinion for the main session: a deploy CLI, a launcher and a package-script name under a Codex-shaped payload whose transcript path names none of git, gh or claude -- no registry record (the rule only adds a deny)"
+  "ab-deploy-carve-allow|case_ab_deploy_carve_allow|no opinion: every DEPLOY_CARVE_OUTS row, its trailing arguments, a path, a chain, and bare and Codex payloads, both roles"
+  "ab-deploy-carve-launcher|case_ab_deploy_carve_launcher|no opinion: the carve-out table through npx, bunx, pnpm, pnpm exec or dlx, yarn and npm exec, past a version marker and dash options, both roles"
+  "ab-deploy-carve-deny-sub|case_ab_deploy_carve_deny_sub|deny with today's reason: a subcommand outside the table, a bare CLI, gen types without --local, an option before the subcommand, a prefix word, a lost tail, the package-script route and a non-carved hit beside a carved one, both roles"
+  "ab-deploy-carve-deny-veto|case_ab_deploy_carve_deny_veto|deny as <cli> with <veto>: each remote flag (read from the hook) however spelled or placed, a dollar sign and a backtick on a carved row; a gh finding keeps its own reason, both roles"
   "ab-deploy-never-executes|case_ab_deploy_never_executes|deny through a launcher, deny by script name and no opinion for npm test with the launchers, package managers and listed CLIs trapped on PATH: nothing from the scanned command is executed"
   "push-optval-deny-main|case_push_optval_deny_main|deny: a push behind nice/sudo/stdbuf/exec/xargs/time and an option with a separate value, naming the fixed command-prefix reason"
   "push-optval-deny-precedence|case_push_optval_deny_precedence|deny: an earlier unresolved reason and command-line config keep their own deny -- control, not part of the mutation-proof registry"
