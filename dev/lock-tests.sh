@@ -760,6 +760,7 @@ case_help_exit_0() {
   expect "--owner-pid"
   expect "TBF_OWNER_PID"
   expect "journal"
+  expect "stop-unknown"
 }
 
 # 16. unknown-subcommand — usage on stderr, not stdout (see case 12's note on the runner's split
@@ -1145,6 +1146,29 @@ case_journal_stage_record() {
   jq_ok "$jf" 3 '(keys_unsorted == ["v","ts","run_id","event","session","stage","issue","outcome"])'
 }
 
+# 34b. journal-run-stop-record — `stage=run` accepts each reason of the closed vocabulary (typed out
+# here, so dropping one from the script fails), writes no issue key and keeps the fixed key order;
+# a per-issue skipped record still writes with issue between stage and outcome.
+# mutant:533-run-reason-dropped — removes red-baseline from RUN_STOP_REASONS, so that reason is refused.
+case_journal_run_stop_record() {
+  local dir; dir="$(mk_repo journal-run-stop-record)"
+  run_lock "$dir" "$$" acquire
+  local rid; rid="$(run_id_from_out)"
+  local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
+  local r n=1
+  for r in red-baseline dirty-tree stop-switch stop-unknown nothing-to-do preflight permission-denied; do
+    run_lock "$dir" "$$" journal "$rid" stage=run outcome=stopped "reason=$r"
+    expect_rc 0
+    expect_out "journal=written"
+    n=$((n + 1))
+    jq_ok "$jf" "$n" '(keys_unsorted == ["v","ts","run_id","event","session","stage","outcome","reason"]) and .event == "stage" and .stage == "run" and .outcome == "stopped" and .reason == $r and (has("issue") | not) and .run_id == $rid' --arg rid "$rid" --arg r "$r"
+  done
+  run_lock "$dir" "$$" journal "$rid" stage=implementer issue=5 outcome=skipped reason=foreign-worktree
+  expect_rc 0
+  jq_ok "$jf" 9 '(keys_unsorted == ["v","ts","run_id","event","session","stage","issue","outcome","reason"]) and .issue == 5 and .outcome == "skipped" and .reason == "foreign-worktree"'
+  [ "$(jlines "$jf")" = "9" ] || { __ok=0; __why="${__why}expected 9 journal lines, got $(jlines "$jf")\n"; }
+}
+
 # 35. journal-rejects-unsafe-values — every row exits 2 with a reason on stderr and leaves the
 # journal file and the whole trail-blazer tree untouched (no new file anywhere, including a
 # traversal target).
@@ -1198,6 +1222,35 @@ case_journal_rejects_unsafe_values() {
   journal_rejects "runid-slash" "run-20200101T000000Z-1/../../x" stage=a issue=1 outcome=b
   local stray; stray="$(find "$dir" -name 'evil*' -o -name 'x.jsonl' 2>/dev/null)"
   [ -z "$stray" ] || { __ok=0; __why="${__why}stray traversal file: $stray\n"; }
+}
+
+# 35b. journal-run-stop-rejects — a stage=run record with an unknown or substring reason, another
+# outcome, an issue or any other key, and a non-run stage without issue, all exit 2 and change nothing.
+# mutant:533-run-reason-unchecked — neuters the RUN_STOP_REASONS membership check.
+# mutant:533-run-reason-substring — drops the spaces around the reason in the membership pattern, so
+#   a substring such as `red` matches.
+# mutant:533-run-outcome-unchecked — drops the outcome=stopped requirement for stage=run.
+# mutant:533-run-extra-keys-allowed — drops the no-other-key clause for stage=run.
+# mutant:533-run-keys-partial — the no-other-key clause checks only issue and pr, so retries, deploy,
+#   harness and branch pass.
+# mutant:533-issue-optional-everywhere — a non-run stage stops requiring issue.
+case_journal_run_stop_rejects() {
+  local dir; dir="$(mk_repo journal-run-stop-rejects)"
+  run_lock "$dir" "$$" acquire
+  local rid; rid="$(run_id_from_out)"
+  jr_dir="$dir"
+  jr_file="$(journal_dir_of "$dir")/$rid.jsonl"
+  journal_rejects "run-unknown-reason" "$rid" stage=run outcome=stopped reason=bogus
+  journal_rejects "run-substring-reason" "$rid" stage=run outcome=stopped reason=red
+  journal_rejects "run-no-reason" "$rid" stage=run outcome=stopped
+  journal_rejects "run-other-outcome" "$rid" stage=run outcome=died reason=red-baseline
+  journal_rejects "run-with-issue" "$rid" stage=run issue=1 outcome=stopped reason=red-baseline
+  journal_rejects "run-with-pr" "$rid" stage=run outcome=stopped reason=red-baseline pr=3
+  journal_rejects "run-with-retries" "$rid" stage=run outcome=stopped reason=red-baseline retries=0
+  journal_rejects "run-with-deploy" "$rid" stage=run outcome=stopped reason=red-baseline deploy=ok
+  journal_rejects "run-with-harness" "$rid" stage=run outcome=stopped reason=red-baseline harness=3.5.0
+  journal_rejects "run-with-branch" "$rid" stage=run outcome=stopped reason=red-baseline branch=claude/1-x
+  journal_rejects "missing-issue" "$rid" stage=a outcome=b retries=0
 }
 
 # 36. journal-requires-run-file — `journal` never creates a run's file (rc 1, nothing created); a
@@ -1481,6 +1534,8 @@ cases=(
   "journal-acquire-release|case_journal_acquire_release|#251: acquire appends one valid acquire record, stdout keeps run-id= last; release appends one; a mismatch and released=none append none"
   "journal-stage-record|case_journal_stage_record|#251: journal appends a stage record with fixed key order and numeric issue/pr/retries; a minimal call omits optional keys"
   "journal-rejects-unsafe-values|case_journal_rejects_unsafe_values|#251: unknown/duplicate/missing keys, out-of-set or over-long values and malformed run ids exit 2 and change nothing"
+  "journal-run-stop-record|case_journal_run_stop_record|#533: stage=run accepts each of the seven reasons, writes no issue key, keeps the fixed key order; a per-issue skipped record still writes normally"
+  "journal-run-stop-rejects|case_journal_run_stop_rejects|#533: stage=run with an unknown or substring reason, another outcome, an issue or any other key, and a non-run stage without issue, all exit 2 and change nothing"
   "journal-requires-run-file|case_journal_requires_run_file|#251: journal never creates a run file (rc 1); a symlinked run file or journal dir is refused untouched"
   "journal-best-effort|case_journal_best_effort|#251: a blocked journal path leaves acquire/release rc, stdout and lock files unchanged with one warning; journal exits 1"
   "journal-session-id|case_journal_session_id|#251: a UUID-shaped session id is recorded verbatim; an unsafe, over-long or unset one is recorded as an empty string"

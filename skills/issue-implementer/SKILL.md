@@ -122,8 +122,11 @@ Every `planner`, `implementer`, and `verifier` report ends with one machine-read
   lines too), run `harness-lock.sh journal <run-id> stage=<stage> issue=<n> outcome=<slug>` (the
   run id is step 0's; add `pr=<n>` once a PR exists). Also journal step 2e's PR open
   (`outcome=pr-opened pr=<pr> branch=<branch>`), step 2f's blocked commit (`outcome=impl-blocked
-  branch=<branch>`), and each Durable escalation (`outcome=escalated reason=<slug>`). Identifiers
-  only; best effort — a failed or denied call is one summary line, never retried or escalated.
+  branch=<branch>`), each Durable escalation (`outcome=escalated reason=<slug>`), and step 0's
+  foreign-worktree skip (`outcome=skipped reason=foreign-worktree`). Identifiers only; best effort —
+  a failed or denied call is one summary line, never retried or escalated.
+  A run-level STOP journals `stage=run outcome=stopped reason=<slug>` once, with no `issue=`,
+  before its release; each stop site names its slug.
 
 The orchestrator emits this line itself, on the stage's behalf, whenever a stage died or never
 reported, and always for merge — keeping `issue-cycle`'s ledger reconciliation checkable.
@@ -315,7 +318,8 @@ everywhere this doc says "the default branch".
   interrupted and work is preserved, check out the default branch, and continue — do NOT label
   `impl-blocked`; step 2b's classification rule resumes or resets it. Note the recovery in your
   summary.
-- **Anywhere else** → STOP and tell the user. That's uncommitted human work; never yours to move.
+- **Anywhere else** → STOP (journal `reason=dirty-tree`) and tell the user. That's uncommitted human
+  work; never yours to move.
 
 **Stale worktrees → sweep**, before the hygiene run below (a stale worktree can block
 `cleanup-after-merge.sh` from deleting a merged branch it still holds), in both modes:
@@ -331,7 +335,8 @@ the issue, opening with `<!-- harness-audit -->` (pure bookkeeping), that its wo
 and anything committed remains on the branch, then
 `git worktree remove <path>` (`--force` over untracked/ignored files like `node_modules`; tracked
 work is already committed). **A path that is not one of ours is never yours to remove** — leave
-it; if it holds a branch this batch needs, skip that issue and tell the human. Report every sweep
+it; if it holds a branch this batch needs, skip that issue (journal `stage=implementer issue=<n>
+outcome=skipped reason=foreign-worktree`) and tell the human. Report every sweep
 in the summary.
 
 **Stale `building` labels → sweep**, in both modes (cleanup, never a status decision; best
@@ -354,7 +359,8 @@ anything**: on the clean default branch, run the project's verification commands
 
 **Green** → rewrite `.claude/BASELINE.md` with the new commit SHA (the full 40-char SHA, from
 `git rev-parse HEAD`), today's date, and each command's outcome (e.g. "pytest: 631 passed").
-**Red** → STOP the whole run and report prominently; fixing main is the human's call.
+**Red** → STOP the whole run (journal `reason=red-baseline`) and report prominently; fixing main
+is the human's call.
 
 Then install dependencies using the project's setup command from CLAUDE.md (e.g. `pnpm install`);
 skip if the project has no dependency step.
@@ -366,9 +372,9 @@ plan_selection: [...], counts: {...} }`. `plan_selection` has already done the t
 plan/comment selection (#176) and the plan-binding approval check (#174): one entry per ready
 issue it could fetch, `{number, plan, trusted_post_plan, untrusted_post_plan, approval,
 binding_line}`. This batch run only tells you which issues are ready (**report them to the user**,
-number + title — if empty, say so and stop, naming `counts.ready_query_unavailable: true` if set:
-that means the ready query failed closed this run (#284) — a degraded run, not an empty queue);
-step 2a re-runs the script itself, fresh, per issue,
+number + title — if empty, say so and stop (standalone only: journal `reason=nothing-to-do`),
+naming `counts.ready_query_unavailable: true` if set: that means the ready query failed closed this
+run (#284) — a degraded run, not an empty queue); step 2a re-runs the script itself, fresh, per issue,
 immediately before dispatch, since the approval binding must reflect the freshest label/plan
 state, not this snapshot.
 

@@ -8,6 +8,7 @@
 #   harness-lock.sh status
 #   harness-lock.sh journal <run-id> stage=<s> issue=<n> outcome=<o> [retries=<k>] [deploy=<d>]
 #                           [harness=<v>] [pr=<n>] [branch=<b>] [reason=<r>]
+#   harness-lock.sh journal <run-id> stage=run outcome=stopped reason=<r>
 #   harness-lock.sh --help
 #
 # An atomic `mkdir` of <git-common-dir>/trail-blazer/lock (git rev-parse --git-common-dir, so
@@ -73,7 +74,9 @@
 # name. A symlink or non-regular file/directory at the journal path is refused. A journal failure
 # inside acquire/release never changes their exit status, stdout, or lock files (one stderr
 # `warning: journal` line); only the `journal` subcommand itself exits 1. `session` is
-# CLAUDE_CODE_SESSION_ID only when it matches [A-Za-z0-9-]{1,64}, else "".
+# CLAUDE_CODE_SESSION_ID only when it matches [A-Za-z0-9-]{1,64}, else "". A run-level stop
+# (#533) is the one `stage` record with no `issue`: `stage=run outcome=stopped reason=<r>`, where
+# <r> is one of RUN_STOP_REASONS and no other key is accepted.
 #
 # CODEX CALLER CONTRACT (#408): Codex sets neither CLAUDE_PID nor TBF_OWNER_PID, and under
 # `codex exec`/`codex --no-daemon` the session's own native `codex` process is every shell call's
@@ -133,6 +136,9 @@ LOCK_SUBCOMMANDS="acquire release status journal"
 # Newest run-journal files kept by acquire's prune (one line so fixtures can grep it).
 JOURNAL_KEEP=500
 
+# Closed vocabulary of run-level stop reasons for `journal ... stage=run` (one line; --help echoes it).
+RUN_STOP_REASONS="red-baseline dirty-tree stop-switch stop-unknown nothing-to-do preflight permission-denied"
+
 usage() {
   cat <<'EOF'
 usage: harness-lock.sh acquire [--owner-pid <pid>]
@@ -140,6 +146,7 @@ usage: harness-lock.sh acquire [--owner-pid <pid>]
        harness-lock.sh status
        harness-lock.sh journal <run-id> stage=<s> issue=<n> outcome=<o> [retries=<k>] [deploy=<d>]
                                [harness=<v>] [pr=<n>] [branch=<b>] [reason=<r>]
+       harness-lock.sh journal <run-id> stage=run outcome=stopped reason=<r>
        harness-lock.sh --help
 
 Single-flight lock for one harness checkout: an atomic `mkdir` of
@@ -168,8 +175,10 @@ directory holds six plain files: run-id, pid, host, started-at, harness-version,
   journal <run-id> key=value...
                     Append one identifiers-only `stage` record to the run's journal file
                     <git-common-dir>/trail-blazer/journal/<run-id>.jsonl and print
-                    `journal=written` (exit 0). Required keys: stage, issue, outcome; optional:
-                    retries, deploy, harness, pr, branch, reason. An unknown/duplicate key, a value
+                    `journal=written` (exit 0). Required keys: stage, issue, outcome — except a
+                    run-level stop, `stage=run`, which takes exactly `outcome=stopped` and
+                    `reason=<r>`, nothing else; optional: retries, deploy, harness, pr, branch,
+                    reason. An unknown/duplicate key, a value
                     outside its character set or length cap, or a malformed run id is a usage error
                     (exit 2, nothing written); a missing run file (only acquire creates it), a
                     symlink, or a failed write exits 1. acquire/release also write lock events to
@@ -190,6 +199,8 @@ Exit codes: 0 = success, 2 = usage/environment error (including a malformed owne
 Codex app-server daemon owner), 3 = conflict (held, release mismatch, or a reclaim marker),
 1 = a `journal` write failed (journal subcommand only).
 EOF
+  echo
+  echo "Run-stop reasons (stage=run): $RUN_STOP_REASONS"
 }
 
 # --- small helpers -----------------------------------------------------------------------------
@@ -706,8 +717,20 @@ cmd_journal() {
         ;;
     esac
   done
-  if [ -z "$f_stage" ] || [ -z "$f_issue" ] || [ -z "$f_outcome" ]; then
-    echo "harness-lock.sh: journal: stage, issue and outcome are required" >&2
+  if [ "$f_stage" = "run" ]; then
+    if [ -n "$f_issue$f_retries$f_deploy$f_harness$f_pr$f_branch" ] || [ "$f_outcome" != "stopped" ]; then
+      echo "harness-lock.sh: journal: stage=run takes only outcome=stopped and reason=<one of: $RUN_STOP_REASONS>" >&2
+      exit 2
+    fi
+    case " $RUN_STOP_REASONS " in
+      *" $f_reason "*) ;;
+      *)
+        echo "harness-lock.sh: journal: stage=run reason must be one of: $RUN_STOP_REASONS" >&2
+        exit 2
+        ;;
+    esac
+  elif [ -z "$f_stage" ] || [ -z "$f_issue" ] || [ -z "$f_outcome" ]; then
+    echo "harness-lock.sh: journal: stage, issue and outcome are required (stage=run takes no issue)" >&2
     exit 2
   fi
 
@@ -719,7 +742,9 @@ cmd_journal() {
   fi
 
   local rec
-  rec='{"v":1,"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","run_id":"'"$rid"'","event":"stage","session":"'"$(journal_session)"'","stage":"'"$f_stage"'","issue":'"$f_issue"',"outcome":"'"$f_outcome"'"'
+  rec='{"v":1,"ts":"'"$(date -u +%Y-%m-%dT%H:%M:%SZ)"'","run_id":"'"$rid"'","event":"stage","session":"'"$(journal_session)"'","stage":"'"$f_stage"'"'
+  [ -z "$f_issue" ]   || rec="$rec"',"issue":'"$f_issue"
+  rec="$rec"',"outcome":"'"$f_outcome"'"'
   [ -z "$f_retries" ] || rec="$rec"',"retries":'"$f_retries"
   [ -z "$f_deploy" ]  || rec="$rec"',"deploy":"'"$f_deploy"'"'
   [ -z "$f_harness" ] || rec="$rec"',"harness":"'"$f_harness"'"'
