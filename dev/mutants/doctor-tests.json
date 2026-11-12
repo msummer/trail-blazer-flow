@@ -2380,6 +2380,262 @@
         "codex-doctor-contract-case",
         "codex-doctor-contract-symlink"
       ]
+    },
+    {
+      "name": "631-cm-overlap-ignored",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  ovl=\"$({ printf '%s\\n' \"$shared\" | awk -v f=\"$F\" 'length($0) > 0 && $0 != f'",
+          "to": "  ovl=\"$({ printf '%s\\n' \"$shared\" | awk -v f=\"$F\" 'length($0) > 0 && 0'"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-overlap-outside",
+        "changelog-merge-submodule"
+      ]
+    },
+    {
+      "name": "631-cm-pre-post-skipped",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  if (hd[1] != hd[2]) { print \"outside-section\"; exit }\n  for (i = 1; i <= hd[1]; i++) if ((L[1, i] \"\") != (L[2, i] \"\")) { print \"outside-section\"; exit }\n  post1 = n[1] - en[1] + 1; post2 = n[2] - en[2] + 1\n  if (post1 != post2) { print \"outside-section\"; exit }\n  for (i = 0; i < post1; i++) if ((L[1, en[1] + i] \"\") != (L[2, en[2] + i] \"\")) { print \"outside-section\"; exit }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-lane-outside-section"
+      ]
+    },
+    {
+      "name": "631-cm-suffix-skipped",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  for (j = 1; j <= bm - p; j++) if ((L[2, h0 + p + nn + j] \"\") != (L[1, m0 + p + j] \"\")) { print \"not-an-insertion\"; exit }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-lane-edits-in-section"
+      ]
+    },
+    {
+      "name": "631-cm-mid-as-top",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  if (!topok && !botok) { print \"mid-section\"; exit }\n",
+          "to": "  if (!topok && !botok) topok = 1\n"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-mid-section"
+      ]
+    },
+    {
+      "name": "631-cm-bottom-as-top",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  if (topok) { k = 0;",
+          "to": "  if (topok || botok) { k = 0;"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-bottom-append"
+      ]
+    },
+    {
+      "name": "631-cm-head-check-dropped",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  [ \"$remote\" = \"$head\" ] || hold \"head-moved\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-head-moved"
+      ]
+    },
+    {
+      "name": "631-cm-decl-from-head",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  decl_at \"$base\"\n  case \"$cd_state\" in\n    absent) echo \"verdict=absent\"",
+          "to": "  decl_at \"$head\"\n  case \"$cd_state\" in\n    absent) echo \"verdict=absent\""
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-declaration-from-base"
+      ]
+    },
+    {
+      "name": "631-cm-parent-order",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "-p \"$head\" -p \"$base\"",
+          "to": "-p \"$base\" -p \"$head\""
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-rebuild-top"
+      ]
+    },
+    {
+      "name": "631-cm-unknown-key-accepted",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "      *) unknown=1; continue ;;\n",
+          "to": "      *) continue ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-declaration-malformed"
+      ]
+    },
+    {
+      "name": "631-cm-prefix-overlap-dropped",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  pfx=\"$({ comm -12 \"$tmp/lane-anc\" \"$tmp/base-paths\"; comm -12 \"$tmp/base-anc\" \"$tmp/lane-paths\"; } 2>/dev/null)\" || hold \"git-failed\"\n",
+          "to": "  pfx=\"\"\n"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-dir-file"
+      ]
+    },
+    {
+      "name": "631-cm-tree-check-dropped",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  [ -z \"$bad_lane$bad_base\" ] || hold \"tree-check\"\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-tree-check"
+      ]
+    },
+    {
+      "name": "631-cm-diff-submodules-ignored",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  git diff --no-renames --ignore-submodules=none --name-only -z",
+          "to": "  git diff --no-renames --name-only -z"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-submodule"
+      ]
+    },
+    {
+      "name": "631-cm-nul-check-dropped",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "      if [ \"$(( $(tr -d '\\000' <\"$tmp/$p\" | wc -c) ))\" -ne \"$(( $(wc -c <\"$tmp/$p\") ))\" ]; then\n",
+          "to": "      if false; then\n"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-binary-file"
+      ]
+    },
+    {
+      "name": "631-cm-nul-base-only",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "    for p in m h b; do\n      if [ \"$(( $(tr",
+          "to": "    for p in b; do\n      if [ \"$(( $(tr"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-binary-file"
+      ]
+    },
+    {
+      "name": "631-cm-newline-base-only",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "    for p in m h b; do\n      if [ -s",
+          "to": "    for p in b; do\n      if [ -s"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-no-final-newline"
+      ]
+    },
+    {
+      "name": "631-cm-tree-check-lane-half",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "  [ -z \"$bad_lane$bad_base\" ] || hold \"tree-check\"\n",
+          "to": "  [ -z \"$bad_base\" ] || hold \"tree-check\"\n"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-tree-check"
+      ]
+    },
+    {
+      "name": "631-cm-overlay-submodules-ignored",
+      "target": "bin/changelog-merge.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "changelog-merge",
+      "edits": [
+        {
+          "from": "git diff-tree -r -z --no-renames --ignore-submodules=none --raw",
+          "to": "git diff-tree -r -z --no-renames --raw"
+        }
+      ],
+      "expect_fail": [
+        "changelog-merge-submodule"
+      ]
     }
   ]
 }

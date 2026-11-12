@@ -78,7 +78,8 @@ case rather than silently dropped. The single-case/filter form
 `dev/doctor-tests.sh` is a separate negative-test harness for the *consumer* doctor
 (`bin/check-harness.sh`), its scoped-autonomy companion (`bin/check-decision-record.sh`), the
 merge floor's governance-path classifier (`bin/governance-paths.sh`, #331), the Autonomy
-reserve's path matcher (`bin/reserve-paths.sh`, #552), the Codex
+reserve's path matcher (`bin/reserve-paths.sh`, #552), full auto's changelog merge
+(`bin/changelog-merge.sh`, #631), the Codex
 compatibility installer (`bin/codex-setup.sh`, #408 — its own `--check` drift mode is #410's
 companion, hence living here rather than in a new suite), and the launchd-driven unattended
 `codex exec` wrapper (`bin/codex-scheduled-run.sh`, #427): it
@@ -91,7 +92,10 @@ directly, not only through the doctor, `bin/governance-paths.sh`'s own floor mod
 `--check` mode directly, against fixture git repos it builds for that purpose, not only through
 the doctor's own validation of it, `bin/reserve-paths.sh`'s own diff mode and `--check` mode the
 same way (the written dialect, every unreadable entry failing closed, and the read-only
-guarantee), `bin/codex-setup.sh` directly against a fake Codex
+guarantee), `bin/changelog-merge.sh` directly (its `--declared` mode and its merge mode, against
+fixture repos with a published lane branch: every hold reason, the declaration read at the base
+tip only, and that it writes no ref, no working-tree file and not the repo's own index),
+`bin/codex-setup.sh` directly against a fake Codex
 plugin-cache install and fixture repos it builds for that purpose (write mode and its `--check`
 twin alike — the generated agent TOMLs' byte-fidelity to `agents/*.md`, the installed rules
 file's allow/forbidden/gated content, contract-loading into an `AGENTS.md` or a
@@ -112,7 +116,7 @@ finish in, a child that dies before reporting counting as a FAIL naming the case
 rows run in that pool like every other row. The suite runs in CI as the third command, but
 it is not part of `dev/selfcheck.sh` itself; run it by hand whenever `bin/check-harness.sh`,
 `bin/check-decision-record.sh`, `bin/governance-paths.sh`, `bin/reserve-paths.sh`,
-`bin/codex-setup.sh`, or `bin/codex-scheduled-run.sh` changes.
+`bin/changelog-merge.sh`, `bin/codex-setup.sh`, or `bin/codex-scheduled-run.sh` changes.
 
 `dev/hook-tests.sh` is a separate negative-test harness for all five plugin-shipped `PreToolUse`
 hooks (`hooks/git-c-guard.sh`, `hooks/agent-boundary.sh`, `hooks/push-guard.sh`,

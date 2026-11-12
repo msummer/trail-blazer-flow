@@ -38,6 +38,8 @@ prefix_rule(pattern = ["codex-scheduled-run.sh"], decision = "forbidden", justif
 # Each pair below allows the script's bare name AND pins the match to this plugin install's own
 # bin/ directory (the plugin-bin placeholder), so a same-named file a subagent writes into the
 # workspace can never qualify (#408, ADR 0002 amendment 2026-09-26(2) Q1).
+prefix_rule(pattern = ["changelog-merge.sh"], decision = "allow", justification = "harness script gated by host_executable below")
+host_executable(name = "changelog-merge.sh", paths = ["@PLUGIN_BIN@/changelog-merge.sh"])
 prefix_rule(pattern = ["check-decision-record.sh"], decision = "allow", justification = "harness script gated by host_executable below")
 host_executable(name = "check-decision-record.sh", paths = ["@PLUGIN_BIN@/check-decision-record.sh"])
 prefix_rule(pattern = ["check-harness.sh"], decision = "allow", justification = "harness script gated by host_executable below")

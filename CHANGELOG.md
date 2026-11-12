@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #631: full auto: lanes sharing only a declared append-only changelog run in parallel; the
+  update-branch fallback rebuilds that section (`bin/changelog-merge.sh`). Consumer step: re-copy
+  the permissions block (`Bash(changelog-merge.sh:*)`); on Codex, re-run `bin/codex-setup.sh`.
 - #638: the implementer and verifier run long commands in the foreground or wait for the completion
   notification, never a polling loop, and leave nothing running; on Codex, re-run
   `bin/codex-setup.sh` (`agents/*.md` changed).

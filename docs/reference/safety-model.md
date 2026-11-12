@@ -118,6 +118,17 @@ path-qualified-grant cases, and by the guard hook for the worktree `-C` forms �
 plugin and template ship. As with substitution, a deny matching any one constituent blocks the
 entire composite.
 
+The one commit the harness pushes that the verifier never saw is the changelog route's (#631).
+When a harness PR held by the serial merge train's update-branch fallback (an Autonomy-mode train or a full-auto run) conflicts only in its repo's declared append-only changelog section,
+`bin/changelog-merge.sh` builds a merge-from-base commit with git plumbing — objects only, no ref,
+no working-tree file, not the repo's own index — and the orchestrator pushes it as one plain,
+never-forced `git push origin <commit>:refs/heads/<claude/… branch>`, which `hooks/push-guard.sh`
+judges like any other branch push. Its tree is the base tip's, plus the lane's own verified
+changes, plus a changelog made only of base lines and the lane's verified lines, and the script
+holds unless that tree differs from the base tip only in lane-changed paths and from the head only
+in base-changed paths; every other outcome holds the PR, and CI and the full merge floor still gate the merge. The route adds one
+script grant and no hook, deny or force-push change.
+
 All of the bare-form facts above (prefix matching, the substitution gap, and the `&&`/`|`
 composite split) were verified by live probe against Claude Code 2.1.220 (#41, #39, #55, #79,
 #80) and are unaffected by the `-C` guard hook. The hook's own allow/no-opinion boundary — the

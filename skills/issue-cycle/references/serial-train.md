@@ -91,13 +91,15 @@ Three classes:
 
 ## Update-branch fallback (#257)
 
-For a PR whose **only** hold is the up-to-date rail ("behind"), eligible only when all of these
-hold:
+For a PR whose **only** hold is the up-to-date rail ("behind") — or, for the changelog route below,
+that rail plus a textual conflict — eligible only when all of these hold:
 
 - it is a harness PR (`claude/<n>-…` head branch — never Dependabot, never a human's PR);
 - in this evaluation `merge-floor.sh` printed `floor=hold` with `fail=behind` as its only `fail=`
   line and `ancestry-rc=1` (a git error such as 128, a failed fetch, and every other failed check
-  each print a `fail=` line of their own), and step 3's ledger cross-check passes;
+  each print a `fail=` line of their own) — or with exactly two `fail=` lines, that one and
+  `fail=merge-state mergeStateStatus is DIRTY`, which only the changelog route handles — and
+  step 3's ledger cross-check passes;
 - no update was applied to this PR earlier this pass;
 - this run has already confirmed a merge (guard (d) `MERGED`), or no update-branch has run yet
   this run — so until a merge proves `gh pr merge` works, at most one update runs;
@@ -107,8 +109,9 @@ hold:
 Then:
 
 1. Run `gh pr update-branch <pr>`, one call. Never `--rebase`, never `gh api`, never a local
-   merge or push, never a force-push. Not retried. A non-zero exit or a denial ⇒ held, quoting
-   its stderr. A conflict names the conflict. A denial also names the grant
+   merge or push, never a force-push — the one exception is the changelog route below. Not
+   retried. A non-zero exit or a denial ⇒ held, quoting its stderr, unless the changelog route
+   applies. A conflict names the conflict. A denial also names the grant
    `Bash(gh pr update-branch:*)` in the report, and is never routed around.
 2. `gh pr view <pr> --json headRefOid --jq .headRefOid | tr -d '\r'` gives the new head. If it is
    unchanged, the PR stays held.
@@ -122,8 +125,30 @@ Then:
    with no second update this pass. Guard (b)'s `--match-head-commit` pin and guard (c)'s
    hand-off then use the `head-oid=` this re-run printed, never the pre-update head and never
    step 2's read.
-5. Record "update-branch: `<old head>` → `<new head>`" in the PR's cycle-report row, held or
-   merged alike, and in the merge's audit evidence when it merges.
+5. Record "update-branch: `<old head>` → `<new head>`" (or "update-branch (changelog route):
+   `<old head>` → `<new head>`") in the PR's cycle-report row, held or merged alike, and in the
+   merge's audit evidence when it merges.
+
+### Changelog route (#631)
+
+It runs **instead of step 1** when the floor printed the `fail=merge-state mergeStateStatus is
+DIRTY` line next to `fail=behind`, and **after step 1** when `gh pr update-branch` ran and exited non-zero (never after a denial, which
+holds the PR as step 1 says).
+It is still this PR's one update this pass. It settles one conflict only: the repo's declared
+append-only changelog section (`docs/reference/claude-md-contract.md`, item 12).
+
+1. Run `changelog-merge.sh <base-tip> <head-oid> <head-branch>`, the three values pasted literally
+   from that floor run's `base-tip=`, `head-oid=` and `head-branch=` lines. It writes git objects
+   only and moves no ref.
+2. Only exit 0 with `verdict=updated` as the last line continues. `verdict=absent` holds the PR with
+   "conflict; no Append-only changelog declared". Any other result — `verdict=hold` (quote its
+   `reason=` line and every `overlap:` line), `verdict=error`, a non-zero exit, a crash — holds the
+   PR, quoting stderr when there is any.
+3. Push the printed commit with one plain `git push origin <new-head>:refs/heads/<head-branch>`,
+   `<new-head>` from the script's `new-head=` line and `<head-branch>` from the floor run, both
+   pasted literally. Never forced, never retried; a non-zero exit or a denial holds the PR.
+4. Steps 2–5 above then run as written, with step 2 also requiring the head it reads to equal
+   `new-head=`; any other value holds the PR.
 
 Dependabot and human PRs are never updated.
 
@@ -132,4 +157,4 @@ Dependabot and human PRs are never updated.
 Same rows, stages and vocabulary. Records are per issue, and `reconcile-ledger.sh` keeps the
 last record per issue+stage, so the train's interleaving needs no reconciler change. Step 5 is
 unchanged. Its "what this cycle did" half additionally names any merge-halting or train-stopping
-event and each update-branch pair.
+event and each update-branch pair (a changelog-route pair marked as such).

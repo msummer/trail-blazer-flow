@@ -28,6 +28,7 @@
       "Bash(merge-floor.sh:*)",
       "Bash(reserve-paths.sh:*)",
       "Bash(tracker-sync.sh:*)",
+      "Bash(changelog-merge.sh:*)",
       "Bash(codex-setup.sh:*)",
       "Bash(codex-scheduled-run.sh:*)",
       "Bash(gh auth status:*)",

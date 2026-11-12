@@ -390,7 +390,10 @@ generic subagents need:
      when the repo's merge method is rebase), waits a bounded time for CI, then re-evaluates the
      whole merge floor from the top on the new head (pinning the merge to the head that re-run
      compared); a conflict or a further failure leaves the
-     PR held, named, with the old → new head recorded in the report. Activation (1) does not
+     PR held, named, with the old → new head recorded in the report — except that a conflict
+     confined to the changelog section item 12 declares is settled by the train's changelog route
+     (`bin/changelog-merge.sh`, one script-built merge-from-base commit pushed without force; see
+     `skills/issue-cycle/references/serial-train.md`). Activation (1) does not
      require the `gh pr merge` deny to be lifted, so until a merge is confirmed in a run the train
      applies at most one update-branch (and its CI wait) — with the deny still in place, guard
      (c)'s denial then stops merging for the run.
@@ -487,6 +490,49 @@ generic subagents need:
     error. A malformed section (`no-fence`, `no-url`, `multiple-urls`, `bad-url` or `unknown-key`)
     makes each sync report `tracker=malformed` and skip. The doctor does not validate it. See
     [tracker.md](tracker.md) for the page, the snapshot and the limits.
+
+12. **Append-only changelog** (optional) — a section titled exactly "Append-only changelog" at any
+    heading depth, whose first fenced block names the one changelog file and the one section of it
+    that changes only by insertion:
+
+        ## Append-only changelog
+
+        ```
+        file: CHANGELOG.md
+        section: ## Unreleased
+        ```
+
+    Blank lines and `#` comment lines are allowed; any other line is an unknown key. `file:` is a
+    repo-relative path of letters, digits and `. _ - /` with no leading `/` and no empty, `.` or
+    `..` segment; `section:` is the full Markdown heading line the section starts with (one to six
+    `#`, a space, printable text). It is read only by `bin/changelog-merge.sh`; no section means
+    nothing is declared, never an error, and the doctor does not validate it. A malformed section
+    reports one token: `no-fence`, `unknown-key`, `no-file`, `multiple-files`, `bad-file`,
+    `no-section`, `multiple-sections`, `bad-section`, or `claude-md-not-a-file` (an entry named
+    `CLAUDE.md` that is a symlink or anything other than a plain file).
+
+    What the declaration changes: in a full-auto run (see [workflow.md](workflow.md)'s "Full
+    auto"), wave planning and rule (c) leave the declared file out of the overlap test, so lanes
+    that share only that changelog build in parallel; and wherever the serial train's
+    update-branch fallback runs (item 9's Autonomy mode, or a full-auto run), it gains a changelog
+    route for the conflict that sharing creates. `changelog-merge.sh <base-tip>
+    <head-oid> <head-branch>` reads the declaration from the **base tip's** tree (a lane that adds
+    or removes the section cannot change what is settled), refuses unless the fetched
+    `origin/<branch>` ref is exactly the head, and writes a merge commit — first parent the head, second the base tip —
+    that is the base tip's tree, plus every path the lane changed at the lane's version, plus the
+    declared file rebuilt as the base's own text with the lane's inserted block placed at the same
+    edge of the section. It writes git objects only: no ref, no working-tree file, not the repo's
+    own index. The caller pushes that commit without force, and CI plus the full merge floor still
+    gate the merge. Every other case is a hold with a named reason, and the PR stays for a human
+    (the list is not exhaustive): a path other than
+    the declared file changed on both sides (a submodule pointer included, and a file against a
+    directory of the same name), a path holding a control character, a lane change outside the
+    section, a lane edit or deletion of an existing line in it, an insertion that is not at the top
+    or bottom edge of the section's body, the section heading missing or repeated, a changelog that
+    is not a plain file, holds a NUL byte or lacks a final newline, a new tree that differs from
+    the base tip or the head in an unexpected path, a malformed or unreadable declaration, a failed
+    git or build step, no single merge base, a moved or missing origin branch. Only a single contiguous insertion is settled; a changelog organised in subsections
+    (Keep a Changelog's `### Added`) holds whenever the lane's bullet is not at an edge.
 
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the

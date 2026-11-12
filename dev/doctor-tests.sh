@@ -4005,6 +4005,705 @@ case_reserve_check_git_error() {
   res_expect_exact "outside a repository: stdout" "" "$gov_out"
 }
 
+# ---------------------------------------------------------------------------------------------
+# bin/changelog-merge.sh (#631), run directly via run_cm on mk_gov_repo fixtures. Every fixture is
+# a repo whose main branch holds a CLAUDE.md, a CHANGELOG.md with an `## Unreleased` section over an
+# older `## v1.0.0` one, and a few src/ files; a lane branch (claude/1-lane) diverges from it and its
+# head is published as refs/remotes/origin/claude/1-lane, then main moves on (the base tip).
+
+# run_cm DIR ARGS… — run_res's twin for bin/changelog-merge.sh: run from this checkout, cwd = DIR,
+# HOME/XDG_CONFIG_HOME inside DIR, GIT_CONFIG_NOSYSTEM=1, stdin closed; sets $gov_out/$gov_err/$gov_rc.
+run_cm() {
+  local dir="$1" outfile errfile
+  shift
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$root/bin/changelog-merge.sh" "$@") </dev/null >"$outfile" 2>"$errfile"
+  gov_rc=$?
+  gov_out="$(cat "$outfile")"
+  gov_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $gov_out
+ERR: $gov_err"
+  doctor_rc=$gov_rc
+}
+
+# cm_decl_text — a CLAUDE.md that declares the changelog.
+cm_decl_text() {
+  printf '# CLAUDE.md\n\n## Append-only changelog\n\n```\nfile: CHANGELOG.md\nsection: ## Unreleased\n```\n\n## Other\n\nprose\n'
+}
+
+# cm_claude_with BODY — a CLAUDE.md whose "Append-only changelog" section is one fenced block of BODY.
+cm_claude_with() {
+  printf '# CLAUDE.md\n\n## Append-only changelog\n\n```\n%s\n```\n' "$1"
+}
+
+# cm_changelog FILE LINE… — writes a changelog whose `## Unreleased` body is exactly the given lines
+# (one per argument, '' for a blank line), above an older `## v1.0.0` section.
+cm_changelog() {
+  local f="$1"
+  shift
+  { printf '# Changelog\n\n## Unreleased\n'; printf '%s\n' "$@"; printf '## v1.0.0\n\n- old\n'; } > "$f"
+}
+
+# cm_mk NAME CLAUDE [LINE…] — a fixture repo with one commit on main: CLAUDE (`declared`, `none`, or
+# the literal file text) as CLAUDE.md, a changelog (the given Unreleased body, default one `- #0: seed`
+# bullet) and src/a.txt, src/old.txt. Prints the repo path.
+cm_mk() {
+  local name="$1" claude="$2" dir
+  shift 2
+  dir="$(mk_gov_repo "$name")"
+  case "$claude" in
+    declared) cm_decl_text > "$dir/CLAUDE.md" ;;
+    none) printf '# CLAUDE.md\n\nno section here\n' > "$dir/CLAUDE.md" ;;
+    *) printf '%s' "$claude" > "$dir/CLAUDE.md" ;;
+  esac
+  if [ "$#" -eq 0 ]; then
+    cm_changelog "$dir/CHANGELOG.md" '' '- #0: seed' ''
+  else
+    cm_changelog "$dir/CHANGELOG.md" "$@"
+  fi
+  mkdir -p "$dir/src"
+  printf 'a\n' > "$dir/src/a.txt"
+  printf 'old\n' > "$dir/src/old.txt"
+  gov_commit "$dir" >/dev/null
+  printf '%s' "$dir"
+}
+
+# cm_lane DIR — switches to the lane branch; cm_publish DIR — commits the lane's edits (sets $cm_h),
+# publishes the head as origin's branch ref and switches back to main; cm_base DIR — commits main's
+# own edits (sets $cm_b).
+cm_lane() {
+  (cd "$1" && git checkout -q -b claude/1-lane) >/dev/null
+}
+cm_publish() {
+  cm_h="$(gov_commit "$1")"
+  (cd "$1" && git update-ref refs/remotes/origin/claude/1-lane "$cm_h" && git checkout -q main) >/dev/null
+}
+cm_base() {
+  cm_b="$(gov_commit "$1")"
+}
+
+# cm_run DIR — runs merge mode on the fixture's $cm_b, $cm_h and branch.
+cm_run() {
+  run_cm "$1" "$cm_b" "$cm_h" claude/1-lane
+}
+
+# cm_state_of DIR — the ref list, the real index's checksum and the porcelain status, for a
+# before/after comparison (a settling `git status` first, so a stat refresh is not a difference).
+cm_state_of() {
+  (cd "$1" && git status --porcelain >/dev/null 2>&1; git for-each-ref; cksum .git/index; git status --porcelain) 2>&1
+}
+
+# cm_newhead — the new-head= value of the last run, or empty.
+cm_newhead() {
+  sed -n 's/^new-head=//p' <<<"$gov_out"
+}
+
+# cm_hold_row LABEL REASON — the last run was a hold with exactly this reason line and no new-head.
+cm_hold_row() {
+  [ "$gov_rc" -eq 1 ] || { __ok=0; __why="${__why}$1: rc expected 1, got $gov_rc\n"; }
+  expect_gov_last "verdict=hold"
+  expect_gov_out "reason=$2"
+  expect_gov_out_absent "new-head="
+}
+
+# changelog-merge-rebuild-top — base and lane each add a bullet at the top of the section, the lane
+# also adds src/lane.txt and the base src/base.txt: verdict=updated with the exact stdout grammar,
+# the new commit has the head and then the base tip as parents, its CHANGELOG is the base's with the
+# lane's bullet at the top edge (above the base's own), both other files are present, and the
+# refs, the real index and the status are unchanged; with TMPDIR pointed at an empty directory
+# nothing is left in it. A reversed parent order or a rebuild that drops the base's bullet changes
+# this.
+# mutant:631-cm-parent-order — commit-tree's two -p options swapped, so the base tip is first parent.
+case_changelog_merge_rebuild_top() {
+  local dir new before after want tmpd
+  dir="$(cm_mk changelog-merge-rebuild-top declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  printf 'lane\n' > "$dir/src/lane.txt"
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  printf 'base\n' > "$dir/src/base.txt"
+  cm_base "$dir"
+  before="$(cm_state_of "$dir")"
+  cm_run "$dir"
+  expect_rc 0
+  new="$(cm_newhead)"
+  want="file=CHANGELOG.md
+resolved=rebuilt
+base-tip=$cm_b
+old-head=$cm_h
+new-head=$new
+verdict=updated"
+  res_expect_exact "stdout" "$want" "$gov_out"
+  res_expect_exact "stderr" "" "$gov_err"
+  res_expect_exact "new-head is a commit" "commit" "$(cd "$dir" && git cat-file -t "$new" 2>&1)"
+  res_expect_exact "parents" "$cm_h
+$cm_b" "$(cd "$dir" && git rev-parse "$new^1" "$new^2" 2>&1)"
+  res_expect_exact "parent count" "2" "$(cd "$dir" && git cat-file -p "$new" | grep -c '^parent ')"
+  cm_changelog "$tmpbase/changelog-merge-expected-top.md" '' '- #1' '- #2' '- #0: seed' ''
+  res_expect_exact "CHANGELOG at new-head" "$(cat "$tmpbase/changelog-merge-expected-top.md")" "$(cd "$dir" && git show "$new:CHANGELOG.md" 2>&1)"
+  res_expect_exact "files at new-head" "CHANGELOG.md
+CLAUDE.md
+src/a.txt
+src/base.txt
+src/lane.txt
+src/old.txt" "$(cd "$dir" && git ls-tree -r --name-only "$new" 2>&1)"
+  res_expect_exact "src/lane.txt at new-head" "lane" "$(cd "$dir" && git show "$new:src/lane.txt" 2>&1)"
+  res_expect_exact "src/base.txt at new-head" "base" "$(cd "$dir" && git show "$new:src/base.txt" 2>&1)"
+  after="$(cm_state_of "$dir")"
+  res_expect_exact "refs, index and status unchanged" "$before" "$after"
+  tmpd="$tmpbase/changelog-merge-rebuild-top-tmp"
+  mkdir -p "$tmpd"
+  (cd "$dir" && TMPDIR="$tmpd" HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+    "$bash_bin" "$root/bin/changelog-merge.sh" "$cm_b" "$cm_h" claude/1-lane) >/dev/null 2>&1
+  [ -z "$(ls -A "$tmpd")" ] || { __ok=0; __why="${__why}TMPDIR is not empty afterwards: $(ls -A "$tmpd")\n"; }
+}
+
+# changelog-merge-bottom-append — the lane appends a bullet at the section's end and the base adds
+# one at its top: the lane's block lands after the base's last bullet, before the blank line that
+# closes the section.
+# mutant:631-cm-bottom-as-top — the bottom edge takes the top edge's placement, so the block lands
+# above the base's own bullets.
+case_changelog_merge_bottom_append() {
+  local dir new
+  dir="$(cm_mk changelog-merge-bottom-append declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #0: seed' '- #1' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  cm_base "$dir"
+  cm_run "$dir"
+  expect_rc 0
+  expect_gov_last "verdict=updated"
+  new="$(cm_newhead)"
+  cm_changelog "$tmpbase/changelog-merge-expected-bottom.md" '' '- #2' '- #0: seed' '- #1' ''
+  res_expect_exact "CHANGELOG at new-head" "$(cat "$tmpbase/changelog-merge-expected-bottom.md")" "$(cd "$dir" && git show "$new:CHANGELOG.md" 2>&1)"
+}
+
+# changelog-merge-not-shared — the lane leaves the changelog alone (it deletes src/old.txt, adds an
+# executable src/lane.sh and edits nothing else the base touched) while the base edits it:
+# resolved=not-shared, the tree is the base's plus the lane's changes (the deletion and the
+# executable mode included), and the changelog is the base's.
+case_changelog_merge_not_shared() {
+  local dir new
+  dir="$(cm_mk changelog-merge-not-shared declared)"
+  cm_lane "$dir"
+  printf '#!/bin/sh\n' > "$dir/src/lane.sh"
+  chmod +x "$dir/src/lane.sh"
+  rm "$dir/src/old.txt"
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  printf 'base\n' > "$dir/src/base.txt"
+  cm_base "$dir"
+  cm_run "$dir"
+  expect_rc 0
+  new="$(cm_newhead)"
+  res_expect_exact "stdout" "file=CHANGELOG.md
+resolved=not-shared
+base-tip=$cm_b
+old-head=$cm_h
+new-head=$new
+verdict=updated" "$gov_out"
+  res_expect_exact "files at new-head" "CHANGELOG.md
+CLAUDE.md
+src/a.txt
+src/base.txt
+src/lane.sh" "$(cd "$dir" && git ls-tree -r --name-only "$new" 2>&1)"
+  res_expect_exact "executable mode" "100755" "$(cd "$dir" && git ls-tree "$new" -- src/lane.sh | cut -d' ' -f1)"
+  res_expect_exact "CHANGELOG is the base's" "$(cd "$dir" && git show "$cm_b:CHANGELOG.md")" "$(cd "$dir" && git show "$new:CHANGELOG.md" 2>&1)"
+}
+
+# changelog-merge-overlap-outside — both sides change src/a.txt, and the changelog: a hold naming
+# the overlapping path and no new-head=, nothing left in TMPDIR. A check that never fires lets the
+# merge through.
+# mutant:631-cm-overlap-ignored — the shared-path list never names a path other than the declared file.
+case_changelog_merge_overlap_outside() {
+  local dir tmpd
+  dir="$(cm_mk changelog-merge-overlap-outside declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  printf 'lane\n' > "$dir/src/a.txt"
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  printf 'base\n' > "$dir/src/a.txt"
+  cm_base "$dir"
+  tmpd="$tmpbase/changelog-merge-overlap-outside-tmp"
+  mkdir -p "$tmpd"
+  (cd "$dir" && TMPDIR="$tmpd" HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+    "$bash_bin" "$root/bin/changelog-merge.sh" "$cm_b" "$cm_h" claude/1-lane) >/dev/null 2>&1
+  [ -z "$(ls -A "$tmpd")" ] || { __ok=0; __why="${__why}TMPDIR is not empty after a hold: $(ls -A "$tmpd")\n"; }
+  cm_run "$dir"
+  res_expect_exact "stdout" "overlap: src/a.txt
+reason=overlap
+verdict=hold" "$gov_out"
+  expect_rc 1
+}
+
+# changelog-merge-lane-outside-section — the lane adds its bullet and also edits a line under
+# `## v1.0.0`, while the base edits the changelog too: outside-section.
+# mutant:631-cm-pre-post-skipped — the equality of the text before and after the section, between
+# the merge base and the head, is not checked.
+case_changelog_merge_lane_outside_section() {
+  local dir
+  dir="$(cm_mk changelog-merge-lane-outside-section declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  sed 's/^- old$/- older/' "$dir/CHANGELOG.md" > "$dir/CHANGELOG.new" && mv "$dir/CHANGELOG.new" "$dir/CHANGELOG.md"
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  cm_base "$dir"
+  cm_run "$dir"
+  cm_hold_row "lane edit under v1.0.0" "outside-section"
+}
+
+# changelog-merge-lane-edits-in-section — three lanes: one adds a bullet and rewrites the existing
+# one, one only rewrites it, one deletes it. Each is not-an-insertion.
+# mutant:631-cm-suffix-skipped — the check that everything after the lane's inserted block equals
+# the merge base's remaining body is dropped, so a rewritten bullet next to an insertion passes.
+case_changelog_merge_lane_edits_in_section() {
+  local dir variant
+  for variant in add-and-rewrite rewrite delete; do
+    dir="$(cm_mk "changelog-merge-lane-edits-$variant" declared)"
+    cm_lane "$dir"
+    case "$variant" in
+      add-and-rewrite) cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed edited' '' ;;
+      rewrite) cm_changelog "$dir/CHANGELOG.md" '' '- #0: seed edited' '' ;;
+      delete) cm_changelog "$dir/CHANGELOG.md" '' '' ;;
+    esac
+    cm_publish "$dir"
+    cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+    cm_base "$dir"
+    cm_run "$dir"
+    cm_hold_row "$variant" "not-an-insertion"
+  done
+}
+
+# changelog-merge-mid-section — the lane inserts a bullet between two existing ones: mid-section.
+# mutant:631-cm-mid-as-top — a mid-section insertion is placed at the top edge instead of refused.
+case_changelog_merge_mid_section() {
+  local dir
+  dir="$(cm_mk changelog-merge-mid-section declared '' '- #0: a' '- #0: b' '')"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #0: a' '- #1' '- #0: b' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: a' '- #0: b' ''
+  cm_base "$dir"
+  cm_run "$dir"
+  cm_hold_row "mid-section" "mid-section"
+}
+
+# changelog-merge-section-missing — the base retitles the section (section-missing), and, in a
+# second repo, repeats its heading (section-repeated).
+case_changelog_merge_section_missing() {
+  local dir
+  dir="$(cm_mk changelog-merge-section-missing declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #0: seed' ''
+  sed 's/^## Unreleased$/## v2.0.0/' "$dir/CHANGELOG.md" > "$dir/CHANGELOG.new" && mv "$dir/CHANGELOG.new" "$dir/CHANGELOG.md"
+  cm_base "$dir"
+  cm_run "$dir"
+  cm_hold_row "retitled" "section-missing"
+  dir="$(cm_mk changelog-merge-section-repeated declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #0: seed' ''
+  printf '\n## Unreleased\n\n- again\n' >> "$dir/CHANGELOG.md"
+  cm_base "$dir"
+  cm_run "$dir"
+  cm_hold_row "repeated" "section-repeated"
+}
+
+# cm_strip_nl FILE — drops FILE's final newline.
+cm_strip_nl() {
+  printf '%s' "$(cat "$1")" > "$1.new" && mv "$1.new" "$1"
+}
+
+# cm_nul FILE — appends a line holding a NUL byte to FILE.
+cm_nul() {
+  printf 'x\0y\n' >> "$1"
+}
+
+# cm_plumb_commit DIR PARENT MESSAGE MODE,SHA,PATH… — a commit on PARENT whose tree is PARENT's with
+# each entry set, built in a throwaway index with plumbing only (no working-tree file is read, so a
+# gitlink without a checkout is fine); prints the commit.
+cm_plumb_commit() {
+  local dir="$1" parent="$2" msg="$3" e t
+  shift 3
+  (
+    cd "$dir" || exit 1
+    export GIT_INDEX_FILE="$dir/.git/cm-plumb-index"
+    rm -f "$GIT_INDEX_FILE"
+    git read-tree "$parent" || exit 1
+    for e in "$@"; do
+      git update-index --add --cacheinfo "$e" || exit 1
+    done
+    t="$(git write-tree)" || exit 1
+    git commit-tree "$t" -p "$parent" -m "$msg"
+  )
+}
+
+# changelog-merge-no-final-newline — the changelog lacks a final newline in only the merge base, only
+# the head, or only the base tip: no-final-newline each time.
+# mutant:631-cm-newline-base-only — the final-newline loop reads only the base tip's file.
+case_changelog_merge_no_final_newline() {
+  local dir side
+  for side in m h b; do
+    dir="$(cm_mk "changelog-merge-no-final-newline-$side" declared)"
+    if [ "$side" = m ]; then cm_strip_nl "$dir/CHANGELOG.md"; gov_commit "$dir" >/dev/null; fi
+    cm_lane "$dir"
+    cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+    if [ "$side" = h ]; then cm_strip_nl "$dir/CHANGELOG.md"; fi
+    cm_publish "$dir"
+    cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+    if [ "$side" = b ]; then cm_strip_nl "$dir/CHANGELOG.md"; fi
+    cm_base "$dir"
+    cm_run "$dir"
+    cm_hold_row "no final newline in $side" "no-final-newline"
+  done
+}
+
+# changelog-merge-binary-file — a NUL byte in only the merge base's, only the head's, or only the base
+# tip's changelog: binary-file (awk would cut each line at the NUL and rewrite the file's bytes).
+# mutant:631-cm-nul-check-dropped — the NUL check never fires.
+# mutant:631-cm-nul-base-only — the NUL check reads only the base tip's file.
+case_changelog_merge_binary_file() {
+  local dir side
+  for side in m h b; do
+    dir="$(cm_mk "changelog-merge-binary-file-$side" declared)"
+    if [ "$side" = m ]; then cm_nul "$dir/CHANGELOG.md"; gov_commit "$dir" >/dev/null; fi
+    cm_lane "$dir"
+    cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+    if [ "$side" = h ]; then cm_nul "$dir/CHANGELOG.md"; fi
+    cm_publish "$dir"
+    cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+    if [ "$side" = b ]; then cm_nul "$dir/CHANGELOG.md"; fi
+    cm_base "$dir"
+    cm_run "$dir"
+    cm_hold_row "NUL byte in $side" "binary-file"
+  done
+}
+
+# changelog-merge-dir-file — a file against a directory of the same name, both directions (the lane's
+# x/y against the base's file x, and the lane's file x against the base's x/y): hold overlap naming x,
+# no new-head, instead of silently replacing one with the other.
+# mutant:631-cm-prefix-overlap-dropped — the leading-directory overlap list is always empty (the
+# tree check still holds the merge, but with reason=tree-check, which this case's exact stdout rejects).
+case_changelog_merge_dir_file() {
+  local dir
+  dir="$(cm_mk changelog-merge-dir-file-lane-dir declared)"
+  cm_lane "$dir"
+  mkdir -p "$dir/x"
+  printf 'lane\n' > "$dir/x/y"
+  cm_publish "$dir"
+  printf 'base\n' > "$dir/x"
+  cm_base "$dir"
+  cm_run "$dir"
+  res_expect_exact "lane dir against base file" "overlap: x
+reason=overlap
+verdict=hold" "$gov_out"
+  expect_rc 1
+  dir="$(cm_mk changelog-merge-dir-file-lane-file declared)"
+  cm_lane "$dir"
+  printf 'lane\n' > "$dir/x"
+  cm_publish "$dir"
+  mkdir -p "$dir/x"
+  printf 'base\n' > "$dir/x/y"
+  cm_base "$dir"
+  cm_run "$dir"
+  res_expect_exact "lane file against base dir" "overlap: x
+reason=overlap
+verdict=hold" "$gov_out"
+  expect_rc 1
+}
+
+# changelog-merge-tree-check — a `git` wrapper first on PATH breaks the tree build while no path
+# overlaps, and the tree check alone holds the merge (reason=tree-check, no new-head). It pins both
+# halves of the check with one row each: `update-index` made a silent no-op drops the lane's change
+# (only the head half sees it), and `read-tree` reading the merge base instead of the base tip drops
+# the base's change (only the base-tip half sees it).
+# mutant:631-cm-tree-check-dropped — the tree check never holds.
+# mutant:631-cm-tree-check-lane-half — the check ignores paths where the new tree differs from the base tip.
+case_changelog_merge_tree_check() {
+  local dir tbin realgit row m wrap
+  realgit="$(command -v git)"
+  for row in update-index read-tree; do
+    dir="$(cm_mk "changelog-merge-tree-check-$row" declared)"
+    cm_lane "$dir"
+    printf 'lane\n' > "$dir/src/lane.txt"
+    cm_publish "$dir"
+    printf 'base\n' > "$dir/src/base.txt"
+    cm_base "$dir"
+    tbin="$tmpbase/changelog-merge-tree-check-$row-tbin"
+    mkdir -p "$tbin"
+    if [ "$row" = update-index ]; then
+      wrap='if [ "$1" = update-index ]; then exit 0; fi'
+    else
+      m="$(cd "$dir" && git merge-base "$cm_b" "$cm_h")"
+      wrap="if [ \"\$1\" = read-tree ]; then exec \"$realgit\" read-tree \"$m\"; fi"
+    fi
+    printf '#!/bin/sh\n%s\nexec "%s" "$@"\n' "$wrap" "$realgit" > "$tbin/git"
+    chmod +x "$tbin/git"
+    gov_out="$(cd "$dir" && PATH="$tbin:$PATH" HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 \
+      "$bash_bin" "$root/bin/changelog-merge.sh" "$cm_b" "$cm_h" claude/1-lane 2>/dev/null </dev/null)"
+    gov_rc=$?
+    res_expect_exact "stdout ($row)" "reason=tree-check
+verdict=hold" "$gov_out"
+    [ "$gov_rc" -eq 1 ] || { __ok=0; __why="${__why}$row: rc expected 1, got $gov_rc\n"; }
+  done
+}
+
+# changelog-merge-submodule — a gitlink (never checked out) at `sub`: both sides bumping it is an
+# overlap even when the repo asks git to ignore it (a `ignore = all` in the working tree's
+# .gitmodules, or the repo config diff.ignoreSubmodules=all); a lane-only bump lands in the new tree at
+# the lane's pointer.
+# mutant:631-cm-diff-submodules-ignored — the changed-path lists no longer pass --ignore-submodules=none.
+# mutant:631-cm-overlay-submodules-ignored — the overlay's diff-tree no longer passes --ignore-submodules=none, so the lane-only bump never reaches the tree and the tree check holds.
+case_changelog_merge_submodule() {
+  local dir m0 gm s0 s1 s2 variant new
+  s0="1111111111111111111111111111111111111111"
+  s1="2222222222222222222222222222222222222222"
+  s2="3333333333333333333333333333333333333333"
+  for variant in gitmodules config; do
+    dir="$(cm_mk "changelog-merge-submodule-$variant" declared)"
+    if [ "$variant" = gitmodules ]; then
+      printf '[submodule "sub"]\n\tpath = sub\n\turl = https://example.invalid/sub.git\n\tignore = all\n' > "$dir/.gitmodules"
+      gm="$(cd "$dir" && git hash-object -w .gitmodules)"
+      m0="$(cm_plumb_commit "$dir" main fixture "100644,$gm,.gitmodules" "160000,$s0,sub")"
+    else
+      m0="$(cm_plumb_commit "$dir" main fixture "160000,$s0,sub")"
+      (cd "$dir" && git config diff.ignoreSubmodules all)
+    fi
+    cm_h="$(cm_plumb_commit "$dir" "$m0" lane "160000,$s1,sub")"
+    cm_b="$(cm_plumb_commit "$dir" "$m0" base "160000,$s2,sub")"
+    (cd "$dir" && git update-ref refs/remotes/origin/claude/1-lane "$cm_h")
+    cm_run "$dir"
+    res_expect_exact "both sides bump sub ($variant)" "overlap: sub
+reason=overlap
+verdict=hold" "$gov_out"
+    expect_rc 1
+  done
+  dir="$(cm_mk changelog-merge-submodule-lane-only declared)"
+  printf '[submodule "sub"]\n\tpath = sub\n\turl = https://example.invalid/sub.git\n\tignore = all\n' > "$dir/.gitmodules"
+  gm="$(cd "$dir" && git hash-object -w .gitmodules)"
+  m0="$(cm_plumb_commit "$dir" main fixture "100644,$gm,.gitmodules" "160000,$s0,sub")"
+  cm_h="$(cm_plumb_commit "$dir" "$m0" lane "160000,$s1,sub")"
+  cm_b="$(cm_plumb_commit "$dir" "$m0" base "100644,$gm,src/base.txt")"
+  (cd "$dir" && git update-ref refs/remotes/origin/claude/1-lane "$cm_h")
+  cm_run "$dir"
+  expect_rc 0
+  new="$(cm_newhead)"
+  res_expect_exact "lane-only bump lands" "160000 commit $s1	sub" "$(cd "$dir" && git ls-tree "$new" -- sub 2>&1)"
+}
+
+# changelog-merge-declaration-from-base — the declaration is read from the base tip: where the base
+# has no section and the lane adds one, verdict=absent alone; where the base declares it and the lane
+# deletes it, the merge is still rebuilt.
+# mutant:631-cm-decl-from-head — the declaration is read from the head's tree instead of the base tip's.
+case_changelog_merge_declaration_from_base() {
+  local dir new
+  dir="$(cm_mk changelog-merge-decl-lane-adds none)"
+  cm_lane "$dir"
+  cm_decl_text > "$dir/CLAUDE.md"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  cm_base "$dir"
+  cm_run "$dir"
+  expect_rc 0
+  res_expect_exact "lane adds the section: stdout" "verdict=absent" "$gov_out"
+  dir="$(cm_mk changelog-merge-decl-lane-removes declared)"
+  cm_lane "$dir"
+  printf '# CLAUDE.md\n\nno section here\n' > "$dir/CLAUDE.md"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  cm_base "$dir"
+  cm_run "$dir"
+  expect_rc 0
+  expect_gov_last "verdict=updated"
+  expect_gov_out "resolved=rebuilt"
+  new="$(cm_newhead)"
+  res_expect_exact "lane removes the section: CLAUDE.md is the lane's" "no section here" "$(cd "$dir" && git show "$new:CLAUDE.md" | tail -1)"
+}
+
+# changelog-merge-declared — `--declared` reads HEAD's committed CLAUDE.md: the well-formed section
+# (also one nested at depth three, with comment and blank lines in its block) prints the three
+# lines, and a section-less file, a missing CLAUDE.md and a heading only inside a fenced block each
+# print changelog=absent; all rc 0.
+case_changelog_merge_declared() {
+  local dir
+  dir="$(cm_mk changelog-merge-declared declared)"
+  run_cm "$dir" --declared
+  expect_rc 0
+  res_expect_exact "declared" "changelog=declared
+file=CHANGELOG.md
+section=## Unreleased" "$gov_out"
+  dir="$(cm_mk changelog-merge-declared-nested "$(printf '# CLAUDE.md\n\n### Append-only changelog\n\nprose\n\n```\n# a comment\n\nfile:   docs/CHANGES.md  \nsection:  ### Next\n```\n\n### Next heading\n')")"
+  run_cm "$dir" --declared
+  expect_rc 0
+  res_expect_exact "nested" "changelog=declared
+file=docs/CHANGES.md
+section=### Next" "$gov_out"
+  dir="$(cm_mk changelog-merge-declared-none none)"
+  run_cm "$dir" --declared
+  expect_rc 0
+  res_expect_exact "no section" "changelog=absent" "$gov_out"
+  dir="$(cm_mk changelog-merge-declared-fenced "$(printf '# CLAUDE.md\n\n```\n## Append-only changelog\n\n```\nfile: CHANGELOG.md\nsection: ## Unreleased\n```\n')")"
+  run_cm "$dir" --declared
+  expect_rc 0
+  res_expect_exact "heading inside a fence" "changelog=absent" "$gov_out"
+  dir="$(cm_mk changelog-merge-declared-no-claude none)"
+  (cd "$dir" && git rm -q CLAUDE.md && git commit -q -m "drop CLAUDE.md") >/dev/null
+  run_cm "$dir" --declared
+  expect_rc 0
+  res_expect_exact "no CLAUDE.md" "changelog=absent" "$gov_out"
+}
+
+# changelog-merge-declaration-malformed — each malformed shape: `--declared` prints
+# changelog=malformed and the token, rc 1; merge mode holds with malformed-declaration and the token
+# (the declaration is malformed in the base tip's tree, on every side).
+# mutant:631-cm-unknown-key-accepted — a line that is neither `file:` nor `section:` no longer makes
+# the section malformed.
+cm_malformed_row() {
+  local name="$1" token="$2" claude="$3" dir
+  dir="$(cm_mk "changelog-merge-malformed-$name" "$claude")"
+  if [ "$name" = "symlink" ]; then
+    (cd "$dir" && git mv CLAUDE.md AGENTS.md && ln -s AGENTS.md CLAUDE.md) >/dev/null
+    cm_decl_text > "$dir/AGENTS.md"
+    gov_commit "$dir" >/dev/null
+  fi
+  cm_lane "$dir"
+  printf 'lane\n' > "$dir/src/lane.txt"
+  cm_publish "$dir"
+  printf 'base\n' > "$dir/src/base.txt"
+  cm_base "$dir"
+  run_cm "$dir" --declared
+  res_expect_exact "$name: --declared" "changelog=malformed
+reason=$token" "$gov_out"
+  [ "$gov_rc" -eq 1 ] || { __ok=0; __why="${__why}$name: --declared rc expected 1, got $gov_rc\n"; }
+  cm_run "$dir"
+  cm_hold_row "$name: merge" "malformed-declaration $token"
+}
+case_changelog_merge_declaration_malformed() {
+  cm_malformed_row no-fence no-fence "$(printf '# CLAUDE.md\n\n## Append-only changelog\n\nfile: CHANGELOG.md\n')"
+  cm_malformed_row unknown-key unknown-key "$(cm_claude_with 'file: CHANGELOG.md
+section: ## Unreleased
+colour: blue')"
+  cm_malformed_row no-file no-file "$(cm_claude_with 'section: ## Unreleased')"
+  cm_malformed_row multiple-files multiple-files "$(cm_claude_with 'file: CHANGELOG.md
+file: OTHER.md
+section: ## Unreleased')"
+  cm_malformed_row bad-file-dotdot bad-file "$(cm_claude_with 'file: ../x
+section: ## Unreleased')"
+  cm_malformed_row bad-file-abs bad-file "$(cm_claude_with 'file: /x
+section: ## Unreleased')"
+  cm_malformed_row no-section no-section "$(cm_claude_with 'file: CHANGELOG.md')"
+  cm_malformed_row bad-section bad-section "$(cm_claude_with 'file: CHANGELOG.md
+section: Unreleased')"
+  cm_malformed_row symlink claude-md-not-a-file "x"
+}
+
+# changelog-merge-head-moved — origin's branch ref names another commit (head-moved), and is
+# missing (no-remote-branch).
+# mutant:631-cm-head-check-dropped — the comparison of origin's branch with the head oid is removed.
+case_changelog_merge_head_moved() {
+  local dir m
+  dir="$(cm_mk changelog-merge-head-moved declared)"
+  m="$(cd "$dir" && git rev-parse main)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  cm_base "$dir"
+  (cd "$dir" && git update-ref refs/remotes/origin/claude/1-lane "$m") >/dev/null
+  cm_run "$dir"
+  cm_hold_row "moved" "head-moved"
+  (cd "$dir" && git update-ref -d refs/remotes/origin/claude/1-lane) >/dev/null
+  cm_run "$dir"
+  cm_hold_row "missing" "no-remote-branch"
+}
+
+# changelog-merge-bad-args — a short hash, an upper-case hash, a `--output=` value, a wrong argument
+# count and four bad branch names each exit 2 with verdict=error and write nothing; `--declared`
+# with an extra argument exits 2 with empty stdout.
+case_changelog_merge_bad_args() {
+  local dir br
+  dir="$(cm_mk changelog-merge-bad-args declared)"
+  cm_lane "$dir"
+  printf 'lane\n' > "$dir/src/lane.txt"
+  cm_publish "$dir"
+  printf 'base\n' > "$dir/src/base.txt"
+  cm_base "$dir"
+  run_cm "$dir" "${cm_b%?}" "$cm_h" claude/1-lane
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_cm "$dir" "$cm_b" "$(printf '%s' "$cm_h" | tr 'a-f' 'A-F')" claude/1-lane
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_cm "$dir" "--output=$dir/leak.txt" "$cm_h" claude/1-lane
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  expect_no_file "$dir/leak.txt"
+  run_cm "$dir" "$cm_b" "$cm_h"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_cm "$dir" "$cm_b" "$cm_h" claude/1-lane extra
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  run_cm "$dir"
+  expect_rc 2
+  expect_gov_last "verdict=error"
+  for br in main claude/x-y claude/1-a..b claude/1-a.lock; do
+    run_cm "$dir" "$cm_b" "$cm_h" "$br"
+    expect_rc 2
+    expect_gov_last "verdict=error"
+    expect_gov_out_absent "new-head="
+  done
+  run_cm "$dir" --declared extra
+  expect_rc 2
+  res_expect_exact "--declared with an argument: stdout" "" "$gov_out"
+}
+
+# changelog-merge-control-char-path — a lane path holding an embedded newline (built straight into a
+# tree): control-char-path.
+case_changelog_merge_control_char_path() {
+  local dir m blob basetree newtree head
+  dir="$(cm_mk changelog-merge-control-char-path declared)"
+  m="$(cd "$dir" && git rev-parse main)"
+  blob="$(cd "$dir" && printf 'evil\n' | git hash-object -w --stdin)"
+  basetree="$(cd "$dir" && git rev-parse "$m^{tree}")"
+  newtree="$({ (cd "$dir" && git ls-tree -z "$basetree"); printf '100644 blob %s\tevil\nfile.txt\0' "$blob"; } \
+    | (cd "$dir" && git mktree -z))"
+  cm_h="$(cd "$dir" && git commit-tree "$newtree" -p "$m" -m "lane with a control character path")"
+  (cd "$dir" && git update-ref refs/remotes/origin/claude/1-lane "$cm_h") >/dev/null
+  printf 'base\n' > "$dir/src/base.txt"
+  cm_base "$dir"
+  cm_run "$dir"
+  cm_hold_row "newline in a path" "control-char-path"
+}
+
+# changelog-merge-identity-fallback — with no committer identity configured and none detectable
+# (user.useConfigOnly), the commit is still built, under the script's own fallback identity.
+case_changelog_merge_identity_fallback() {
+  local dir new
+  dir="$(cm_mk changelog-merge-identity-fallback declared)"
+  cm_lane "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #1' '- #0: seed' ''
+  cm_publish "$dir"
+  cm_changelog "$dir/CHANGELOG.md" '' '- #2' '- #0: seed' ''
+  cm_base "$dir"
+  (cd "$dir" && git config --unset user.name && git config --unset user.email && git config user.useConfigOnly true) >/dev/null
+  cm_run "$dir"
+  expect_rc 0
+  expect_gov_last "verdict=updated"
+  new="$(cm_newhead)"
+  res_expect_exact "author" "changelog-merge.sh" "$(cd "$dir" && git log -1 --format=%an "$new" 2>&1)"
+}
+
 # Doctor fixtures (through run_doctor on mk_repo variants). A tracked schema path is added to the
 # index only (git add), the doctor never needs a commit.
 
@@ -5181,7 +5880,7 @@ case_codex_setup_rules_gated() {
     | sed -E 's/^prefix_rule\(pattern = \["([a-z-]+\.sh)"\], decision = "allow"/\1/' | sort -u)"
   hx_names="$(grep -oE '^host_executable\(name = "[a-z-]+\.sh"' "$rules" \
     | sed -E 's/^host_executable\(name = "([a-z-]+\.sh)"/\1/' | sort -u)"
-  want_names="$(printf '%s\n' check-decision-record.sh check-harness.sh cleanup-after-merge.sh \
+  want_names="$(printf '%s\n' changelog-merge.sh check-decision-record.sh check-harness.sh cleanup-after-merge.sh \
     find-implementation-work.sh find-planning-work.sh harness-lock.sh harness-status.sh \
     harness-stop.sh merge-floor.sh reconcile-ledger.sh setup-labels.sh tracker-sync.sh | sort -u)"
   [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}allow-rule .sh names != the listed scripts\ngot:\n$sh_names\n"; }
@@ -9253,6 +9952,26 @@ cases=(
   "reserve-check-scan|case_reserve_check_scan|#552: reserve-paths.sh --check: the built-in schema globs are classified as covered (no line), acknowledged: or schema:, non-schema paths are never listed, and a control byte in a tracked path is shown as ?"
   "reserve-check-unreadable-file|case_reserve_check_unreadable_file|#552: reserve-paths.sh --check on a missing file, a directory or a device -> rc 2 with empty stdout, never absent"
   "reserve-check-git-error|case_reserve_check_git_error|#552: reserve-paths.sh --check: a corrupt index, or a directory outside any repository -> rc 1 with empty stdout and a reason on stderr"
+  "changelog-merge-rebuild-top|case_changelog_merge_rebuild_top|#631: changelog-merge.sh: base and lane each add a bullet at the section's top -> verdict=updated with the exact stdout, parents head then base tip, the base's bullet kept under the lane's, both sides' other files present, refs/index/status unchanged, no temp left"
+  "changelog-merge-bottom-append|case_changelog_merge_bottom_append|#631: changelog-merge.sh: the lane appends at the section's bottom -> the block lands after the base's last bullet, before the closing blank line"
+  "changelog-merge-not-shared|case_changelog_merge_not_shared|#631: changelog-merge.sh: the lane leaves the changelog alone -> resolved=not-shared, base tree plus the lane's changes (deletion and executable mode included)"
+  "changelog-merge-overlap-outside|case_changelog_merge_overlap_outside|#631: changelog-merge.sh: both sides change src/a.txt -> hold, overlap: src/a.txt, reason=overlap, no new-head, nothing left in TMPDIR"
+  "changelog-merge-lane-outside-section|case_changelog_merge_lane_outside_section|#631: changelog-merge.sh: the lane edits a line under an older section -> hold outside-section"
+  "changelog-merge-lane-edits-in-section|case_changelog_merge_lane_edits_in_section|#631: changelog-merge.sh: the lane rewrites or deletes an existing bullet (with or without adding one) -> hold not-an-insertion"
+  "changelog-merge-mid-section|case_changelog_merge_mid_section|#631: changelog-merge.sh: the lane inserts between two existing bullets -> hold mid-section"
+  "changelog-merge-section-missing|case_changelog_merge_section_missing|#631: changelog-merge.sh: the base tip retitles or repeats the section heading -> hold section-missing / section-repeated"
+  "changelog-merge-no-final-newline|case_changelog_merge_no_final_newline|#631: changelog-merge.sh: the merge base's, head's or base tip's changelog lacks a final newline -> hold no-final-newline"
+  "changelog-merge-binary-file|case_changelog_merge_binary_file|#631: changelog-merge.sh: a NUL byte in only the merge base's, head's or base tip's changelog -> hold binary-file"
+  "changelog-merge-dir-file|case_changelog_merge_dir_file|#631: changelog-merge.sh: a lane directory against a base file of the same name, and the reverse -> hold overlap naming the file"
+  "changelog-merge-tree-check|case_changelog_merge_tree_check|#631: changelog-merge.sh: a git wrapper makes update-index a no-op so the lane's changes never reach the tree -> hold tree-check, no new-head"
+  "changelog-merge-submodule|case_changelog_merge_submodule|#631: changelog-merge.sh: both sides bump a gitlink that .gitmodules or diff.ignoreSubmodules says to ignore -> hold overlap: sub; a lane-only bump lands at the lane's pointer"
+  "changelog-merge-declaration-from-base|case_changelog_merge_declaration_from_base|#631: changelog-merge.sh: the declaration is read at the base tip -> a lane adding the section gets verdict=absent, a lane deleting it is still rebuilt"
+  "changelog-merge-declared|case_changelog_merge_declared|#631: changelog-merge.sh --declared: a well-formed section (also nested at depth three) prints three lines; a missing section, a heading only inside a fence, and no CLAUDE.md print changelog=absent"
+  "changelog-merge-declaration-malformed|case_changelog_merge_declaration_malformed|#631: changelog-merge.sh: no-fence, unknown-key, no-file, multiple-files, bad-file, no-section, bad-section and a symlinked CLAUDE.md -> --declared rc 1 with the token, merge mode a hold with malformed-declaration"
+  "changelog-merge-head-moved|case_changelog_merge_head_moved|#631: changelog-merge.sh: origin's branch at another commit -> hold head-moved; missing -> hold no-remote-branch"
+  "changelog-merge-bad-args|case_changelog_merge_bad_args|#631: changelog-merge.sh: short and upper-case hashes, --output=, a wrong argument count and four bad branch names -> rc 2, verdict=error, nothing written; --declared with an argument -> rc 2"
+  "changelog-merge-control-char-path|case_changelog_merge_control_char_path|#631: changelog-merge.sh: a lane path holding an embedded newline -> hold control-char-path"
+  "changelog-merge-identity-fallback|case_changelog_merge_identity_fallback|#631: changelog-merge.sh: no committer identity configured or detectable -> the commit is still built, authored by the script's fallback identity"
   "reserve-doctor-schema-warn|case_reserve_doctor_schema_warn|#552: the doctor under mode: autonomous, no reserve section, eight tracked migrations -> one WARN with the count, six paths and (+2 more), rc 0"
   "reserve-doctor-acknowledged|case_reserve_doctor_acknowledged|#552: the doctor under a Plan auto-approval policy section, a reserve with a not reserved: line over the migrations directory -> the declared PASS counts both kinds of line, one acknowledged PASS carries the count, six paths and (+2 more), no schema WARN"
   "reserve-doctor-declared-quiet|case_reserve_doctor_declared_quiet|#552: the doctor with a declared reserve and auto-approval off -> the declared PASS and no schema line for a tracked migration"
