@@ -16,6 +16,11 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #530: worktree-parallel mode runs the per-issue stop check before each new issue takes a freed
+  slot; on stop it launches nothing further and lets in-flight worktrees finish.
+
 ## v3.5.0
 
 This minor release moves two autonomy rails into read-only, fail-closed scripts: the merge pass's
