@@ -385,3 +385,11 @@ This repo deliberately does **not** aim to pass `bin/check-harness.sh` — that 
   file's header comment). Assertion 4.31 enforces this mechanically for the full-url literal
   values in that one file only; it does not check the id-allocation scheme (documented in the
   file's own header comment) or a bare `#c<n>` mention in prose.
+
+## Tracker
+
+This repo's live tracker (see `docs/reference/tracker.md`).
+
+```
+url: https://claude.ai/artifact/DLQDGQiuNLRZ6n9ewixAba
+```

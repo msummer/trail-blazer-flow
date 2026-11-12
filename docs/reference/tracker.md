@@ -117,11 +117,23 @@ same URL" and the page path is per checkout.
   `{"db":{"rules":[{"path":"","read":"view","write":"admin"}]},"user":{}}`; draft the "Tracker"
   section (written to `CLAUDE.md` only with approval, never committed); then Sync.
 - **Sync**: `tracker-sync.sh`, then an `ArtifactData` `get` of `harness/state` with `out_dir` set
-  to the printed `dir=` to learn the document's `version`, then one `batch` `set` with
-  `file_path` and `if_version`. A version conflict is re-read and re-sent once. The skill never
-  reads the snapshot inline, so issue titles never enter the model's context; if the `get`
-  result shows no version, it skips with one line. Confirmed live at acceptance time; a
-  correction, if any, is recorded here.
+  to the session's scratch directory (never the printed `dir=`, and never under `.git/`) to learn
+  the document's `version`, then one `batch` `set` with `file_path` (the printed `file=`) and
+  `if_version`. The version comes only from the `get` result: a copy saved in the scratch
+  directory, for example by an earlier sync, is never read and never pushed. A version conflict is
+  re-read and re-sent once. The skill never reads the snapshot inline, so issue titles never enter
+  the model's context. It skips with one line when the session has no scratch directory, when the
+  `get` returns an error, or when the `get` result shows no version, and never falls back to a
+  `get` without `out_dir`.
+
+  Checked live (2026-11-12, Claude Code 2.1.322):
+  - The platform's file-edit safety rules refuse an `out_dir` under `.git/`; an `out_dir` outside
+    `.git/` is accepted, need not exist beforehand, and the result shows the version.
+  - A `batch` `set` whose `file_path` reads from `.git/` works.
+  - The first write without `if_version` gives version 1; pinned re-syncs give 2 and then 3.
+  - An `as_level: interact` write is refused and an `as_level: view` read works, which confirms
+    the `admin` write rule. The root capability rule (`path: ""`) is accepted at Create.
+  - A people toggle saved from the page raised no permission prompt.
 - **People read-back**: `ArtifactData` `list` on `people`, reported as data only.
 - **Hand-written update**, only on request: `sections/<id>` and `people/<id>` documents.
 
@@ -145,5 +157,6 @@ tools). Headless `claude -p`, cloud routines and Codex have none of the tools ei
 2026-11-12), so there the skill and the `issue-cycle` closing step print one skip line and change
 nothing. A cycle that cannot sync leaves the last snapshot in place, and the page's `checkedAt`
 shows how old it is (flagged after 24 hours). The cycle runs the Sync after its closing
-reconciliation and before the report, and never fails, halts or reorders because of it. Whether
-the artifact tools prompt for permission in a normal session is not yet recorded here.
+reconciliation and before the report, and never fails, halts or reorders because of it. A sync
+needs the session's scratch directory for its version read. A people toggle saved from the page
+raised no permission prompt (2026-11-12, Claude Code 2.1.322).

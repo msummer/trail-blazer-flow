@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #637: tracker Sync reads the snapshot version into the session's scratch directory (the platform
+  refuses an out_dir under .git/), so syncs land; the page's counts become state-coloured
+  chips (re-publish an existing page by hand); this repo's CLAUDE.md gains its Tracker section.
 - #605: agent-boundary's deploy rule lets the implementer and verifier run a fixed table of local commands
   (supabase start/status/stop/db reset/…, terraform fmt/validate, helm lint/template, wrangler dev/types),
   bare or through a launcher, unless the command names a remote flag, an expansion or a prefix word.
