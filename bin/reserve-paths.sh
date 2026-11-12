@@ -21,7 +21,10 @@
 #                            (stdout is buffered until every path is matched, so a forged path
 #                            cannot smuggle a fake verdict line in ahead of a later error)
 #     Exit 0 for reserved/none/absent. Exit 2 for a bad-arguments error (before any git call); exit
-#     1 for every other error.
+#     1 for every other error. The doctor (bin/check-harness.sh, #613) also runs this mode with HEAD
+#     as both arguments, when HEAD's CLAUDE.md is a symlink, and reads the exit status and, on exit 0,
+#     the whole output, on exit 1 its first and last lines: the `CLAUDE.md at <oid> is a symlink to '…'` and
+#     `malformed 'Autonomy reserve' section at` prefixes are consumed there.
 #
 #   reserve-paths.sh --check <file>
 #     The doctor's (bin/check-harness.sh) mode: parses FILE (a CLAUDE.md) for the section only, and

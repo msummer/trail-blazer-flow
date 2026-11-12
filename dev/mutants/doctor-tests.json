@@ -2224,6 +2224,114 @@
       "expect_fail": [
         "harness-fail-verdict"
       ]
+    },
+    {
+      "name": "617-contract-claude-only",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "codex-doctor-contract-",
+      "edits": [
+        {
+          "from": "  if cm_ls=\"$(git ls-files 2>/dev/null)\"; then\n",
+          "to": "  if [ \"$provider\" = claude ] && cm_ls=\"$(git ls-files 2>/dev/null)\"; then\n"
+        }
+      ],
+      "expect_fail": [
+        "codex-doctor-contract-case",
+        "codex-doctor-contract-symlink"
+      ]
+    },
+    {
+      "name": "613-link-probe-off",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-link-",
+      "edits": [
+        {
+          "from": "\"120000 blob \"*\"${cm_tab}CLAUDE.md\") cm_probe_ran=true ;;",
+          "to": "\"120000 blob \"*\"${cm_tab}NOPE.md\") cm_probe_ran=true ;;"
+        }
+      ],
+      "expect_fail": [
+        "contract-link-rejected",
+        "contract-link-followed",
+        "contract-link-unchecked"
+      ]
+    },
+    {
+      "name": "613-link-fail-pass",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-link-",
+      "edits": [
+        {
+          "from": "          bad \"contract file: CLAUDE.md $cm_rest",
+          "to": "          ok \"contract file: CLAUDE.md $cm_rest"
+        }
+      ],
+      "expect_fail": [
+        "contract-link-rejected"
+      ]
+    },
+    {
+      "name": "613-link-malformed-arm",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-link-",
+      "edits": [
+        {
+          "from": "        \"malformed 'Autonomy reserve' section at \"*)\n          ok \"$cm_link_ok\"\n          ;;\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "contract-link-followed"
+      ]
+    },
+    {
+      "name": "613-link-unchecked-skips",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-link-",
+      "edits": [
+        {
+          "from": "    else\n      cm_name_ok=false\n      wrn \"contract file: could not check that the harness can follow the CLAUDE.md symlink$cm_skip_note\"\n",
+          "to": "    else\n      wrn \"contract file: could not check that the harness can follow the CLAUDE.md symlink$cm_skip_note\"\n"
+        }
+      ],
+      "expect_fail": [
+        "contract-link-unchecked"
+      ]
+    },
+    {
+      "name": "613-link-error-arm-skips",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-link-",
+      "edits": [
+        {
+          "from": "        *)\n          cm_name_ok=false\n          wrn \"contract file: could not check that the harness can follow the CLAUDE.md symlink$cm_skip_note\"\n",
+          "to": "        *)\n          wrn \"contract file: could not check that the harness can follow the CLAUDE.md symlink$cm_skip_note\"\n"
+        }
+      ],
+      "expect_fail": [
+        "contract-link-unchecked"
+      ]
+    },
+    {
+      "name": "613-link-tree-fail-skips",
+      "target": "bin/check-harness.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "contract-link-",
+      "edits": [
+        {
+          "from": "  else\n    cm_name_ok=false\n    wrn \"contract file: could not check that the harness can follow a CLAUDE.md symlink",
+          "to": "  else\n    wrn \"contract file: could not check that the harness can follow a CLAUDE.md symlink"
+        }
+      ],
+      "expect_fail": [
+        "contract-link-unchecked"
+      ]
     }
   ]
 }

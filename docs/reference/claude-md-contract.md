@@ -7,8 +7,8 @@
 ## The CLAUDE.md contract (required)
 
 These skills assume the repo has a **`CLAUDE.md`**, committed under exactly that name (the
-base-tree reads of items 7 and 10 take only an entry named exactly `CLAUDE.md`, and on Claude Code
-`check-harness.sh` FAILs a contract that git tracks under another case, such as `claude.md`, which
+base-tree reads of items 7 and 10 take only an entry named exactly `CLAUDE.md`, and
+`check-harness.sh`, on either provider, FAILs a contract that git tracks under another case, such as `claude.md`, which
 a case-insensitive filesystem still opens as `CLAUDE.md`), documenting the project-specifics the
 generic subagents need:
 
@@ -253,13 +253,15 @@ generic subagents need:
 
    On Claude Code, `check-harness.sh` validates the section with `reserve-paths.sh --check` (the
    Codex doctor has no reserve check): a malformed section is a WARN naming the reason and the
-   entry, never a FAIL. The doctor reads `CLAUDE.md` through the filesystem, so it can report the
-   section as declared when `CLAUDE.md` is a symlink the one-hop rule above cannot follow; the
-   implementer then fails closed, stopping with `reserve-unreadable` and the link in its message,
-   never open. When git tracks the contract only under another case, such as a `claude.md` that a
-   case-insensitive filesystem still opens as `CLAUDE.md`, the doctor instead FAILs, naming
-   `git mv claude.md CLAUDE.md`, and skips this check (and item 10's), so it never reports the
-   section as declared while the implementer reads none; an untracked `CLAUDE.md` is not reported.
+   entry, never a FAIL. Two contract-file checks run on both providers, and on Claude a finding of
+   either skips this check (and item 10's), so it never reports the section as declared while the
+   implementer reads none. When HEAD's tree records `CLAUDE.md` as a symlink, the doctor reads it
+   the one-hop way, through `reserve-paths.sh`'s diff mode run on HEAD, and FAILs a link that read
+   rejects, naming the link text and the reason (a probe that cannot conclude is a WARN); a link
+   that is only uncommitted or staged is not checked. When git tracks the contract only under
+   another case, such as a `claude.md` that a case-insensitive filesystem still opens as
+   `CLAUDE.md`, the doctor FAILs, naming `git mv claude.md CLAUDE.md`; an untracked `CLAUDE.md` is
+   not reported.
    While plan auto-approval is active (a
    "Plan auto-approval policy" section, or item 9's `mode: autonomous`) it also WARNs about tracked
    schema paths (`migrations`, `alembic/versions`, `prisma/schema.prisma`, `*.sql`, as `git`
@@ -462,12 +464,14 @@ generic subagents need:
     WARNs, never FAILs, on a malformed section, naming the malformed reason (`no-fence`,
     `unterminated-fence`, `no-globs`, `negation`, `leading-slash`, or `bracket`) — or, with no
     section at all, PASSes `governance paths: none declared`, or, with a well-formed section,
-    PASSes `governance paths: <n> declared glob(s)`. The doctor reads `CLAUDE.md` through the
-    filesystem, so it can PASS a symlink the one-hop rule cannot follow; the merge pass then
-    fails closed on it. A contract that git tracks only under another case, such as a `claude.md`
-    that a case-insensitive filesystem still opens as `CLAUDE.md`, gets no PASS: the doctor FAILs,
-    naming `git mv claude.md CLAUDE.md`, and prints no `governance paths:` line, because the merge
-    pass reads no section from that repo (an untracked `CLAUDE.md` is not reported). The rule's own
+    PASSes `governance paths: <n> declared glob(s)`. A `CLAUDE.md` symlink in HEAD's tree that the
+    one-hop rule cannot follow gets no PASS: the doctor FAILs it, naming the link text and the
+    reason (item 7), and prints no `governance paths:` line, because the merge pass fails closed on
+    it; an uncommitted link is not checked. A contract that git tracks only under another case,
+    such as a `claude.md` that a case-insensitive filesystem still opens as `CLAUDE.md`, gets no
+    PASS either: the doctor FAILs, naming `git mv claude.md CLAUDE.md`, and prints no
+    `governance paths:` line, because the merge pass reads no section from that repo (an untracked
+    `CLAUDE.md` is not reported). The rule's own
     words apply beyond any explicit list too — a policy/ADR document or CI/build config under a name
     these rules don't match, and **any doubt holds**. Only the merge pass's governance-path read (item 5) and the doctor's
     validation ever read this section; nothing else in the harness does.

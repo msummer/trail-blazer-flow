@@ -18,6 +18,8 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #613, #617: the doctor FAILs a committed `CLAUDE.md` symlink the one-hop read rejects, naming the
+  link and the reason, and `--provider codex` now runs the contract-file name check too.
 - #533: the run journal records why a run stopped early (`stage=run outcome=stopped reason=<slug>`,
   a closed vocabulary harness-lock.sh validates) and a foreign-worktree skip.
 - #619: the verifier gains a `wording` finding class; a fail whose every finding is `wording` gets

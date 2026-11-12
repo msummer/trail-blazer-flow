@@ -191,8 +191,9 @@ current, 1 when anything drifted or a path is unsupported, 2 on a usage or envir
 
 `bin/check-harness.sh --provider codex` (#410) runs a different, additive check set after the
 shared preamble (git remote, `gh`, `jq`, default branch, labels, exec bits, harness version,
-`CLAUDE.md`, `LESSONS.md`) — with `--provider claude` (the default) or no flag at all, the doctor
-is byte-for-byte unchanged. An unrecognised `--provider` value, or any other unrecognised
+`CLAUDE.md` — its size and, on both providers, the contract-file name and symlink checks —
+`LESSONS.md`) — with `--provider claude` (the default) or no flag at all, the doctor
+runs none of the Codex checks below. An unrecognised `--provider` value, or any other unrecognised
 argument, exits 2 before any check runs; `-h`/`--help` exits 0.
 
 - **git/jq preflight.** If `git` isn't on `PATH`, the doctor FAILs and exits 1 immediately (before

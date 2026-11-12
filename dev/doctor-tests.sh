@@ -83,9 +83,12 @@
 # diff mode ignores), every unreadable entry and section fault failing closed in both modes, the
 # base-tip-only read, the buffered output, every bad-argument and git-failure path, the read-only
 # guarantee, and --check's schema classification — plus the doctor's own reserve validator and
-# schema WARN around it (never FAIL), (#614) the doctor's contract-file-name check — it reads the
-# index, FAILs a contract git tracks under another case of claude.md, WARNs when the listing fails,
-# and skips both validators above in either case — and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
+# schema WARN around it (never FAIL), (#614, #617) the doctor's contract-file-name check on both
+# providers — it reads the index, FAILs a contract git tracks under another case of claude.md, WARNs
+# when the listing fails — and (#613) its HEAD symlink probe on both providers — when HEAD's tree
+# holds CLAUDE.md as a symlink it runs reserve-paths.sh's diff mode on HEAD and FAILs a link the
+# one-hop read rejects, WARNs when the probe cannot conclude — each of which skips both validators
+# above on Claude — and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
 # `--check` drift mode is #410's companion, hence living here rather than in a new suite — run
 # directly against a fake Codex plugin-cache install (mk_cx_plugin, a copy of this checkout's
 # bin/*.sh, agents/*.md and templates/codex.rules) and fixture repos it builds for that purpose
@@ -4278,6 +4281,243 @@ case_contract_name_git_error() {
   expect_absent "FAIL  contract file"
   expect_absent "governance paths:"
   expect_absent "autonomy reserve:"
+}
+
+# contract-link-* (#613) — the doctor's HEAD symlink probe. When HEAD's tree records CLAUDE.md as a
+# symlink (mode 120000) the doctor runs bin/reserve-paths.sh in diff mode with HEAD as both base and
+# head, which does the implementer's one-hop base-tree read; a rejected link is a FAIL naming the
+# link text and the script's reason, and the governance and reserve checks, which read through the
+# filesystem and would follow any link, are skipped. Every row commits the link (seed_commit), since
+# an uncommitted or staged-only link is not probed.
+
+# cl_link_row NAME SHAPE REASON — one rejected-link row: a repo whose HEAD tree holds the CLAUDE.md
+# link of SHAPE (built by link_shape, whose targets declare both sections), which the operating
+# system still opens (cn_expect_readable), so a doctor reading through the filesystem would PASS both
+# validators. Expects the one contract-file FAIL carrying REASON, rc 1, and no governance or reserve
+# line.
+cl_link_row() {
+  local name="$1" shape="$2" reason="$3" dir
+  dir="$(mk_repo "$name" gov-declared verbatim)"
+  rm "$dir/CLAUDE.md"
+  if [ "$shape" = "escapes" ]; then
+    link_target_md "$tmpbase/$name-outside.md"
+    ln -s "../$name-outside.md" "$dir/CLAUDE.md"
+  else
+    link_shape "$dir" "$shape"
+  fi
+  (cd "$dir" && git add -A) >/dev/null
+  seed_commit "$dir" >/dev/null
+  cn_expect_readable "$shape" "$dir"
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 1
+  cn_expect_one_fail "$shape"
+  expect "FAIL  contract file: CLAUDE.md is a symlink to '"
+  expect "$reason"
+  expect_absent "governance paths:"
+  expect_absent "autonomy reserve:"
+}
+
+# contract-link-rejected — each shape the one-hop rule rejects, in a link the OS opens: the FAIL
+# names the link and the reason, rc 1, and neither validator PASSes (#613). One row also pins the
+# Claude-only clause saying the doctor skips its checks. A dangling link is named next to the
+# existing no-CLAUDE.md FAIL; a case-mismatched link is named without a count, since a
+# case-insensitive filesystem opens it.
+# mutant:613-link-probe-off — a probe that never recognises a mode-120000 HEAD entry reproduces
+#   #613: the rejected link draws no FAIL and the two validators PASS on the file the OS follows.
+# mutant:613-link-fail-pass — a rejected link reported as a PASS instead of a FAIL leaves rc 0 and
+#   no contract-file FAIL.
+case_contract_link_rejected() {
+  cl_link_row contract-link-absolute absolute "is an absolute path"
+  cl_link_row contract-link-escapes escapes "is not a plain relative path"
+  cl_link_row contract-link-dot-segment dot-segment "is not a plain relative path"
+  cl_link_row contract-link-dot-slash dot-slash-double "is not a plain relative path"
+  cl_link_row contract-link-linked-dir linked-dir "whose directory is missing from that tree"
+  cl_link_row contract-link-chained chained "points at another symlink"
+  expect "skips its reserve and governance checks"
+  local dir
+  dir="$(mk_repo contract-link-missing gov-declared verbatim)"
+  rm "$dir/CLAUDE.md"
+  link_shape "$dir" missing
+  (cd "$dir" && git add -A) >/dev/null
+  seed_commit "$dir" >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 1
+  expect "FAIL  no CLAUDE.md"
+  expect "FAIL  contract file: CLAUDE.md is a symlink to 'NOPE.md'"
+  expect "points at a missing file"
+  dir="$(mk_repo contract-link-case-mismatch gov-declared verbatim)"
+  rm "$dir/CLAUDE.md"
+  link_shape "$dir" case-mismatch
+  (cd "$dir" && git add -A) >/dev/null
+  seed_commit "$dir" >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 1
+  expect "points at a missing file"
+  expect_absent "governance paths:"
+  expect_absent "autonomy reserve:"
+}
+
+# cl_followed_row NAME TEXT — a committed CLAUDE.md symlink with link text TEXT (a plain relative
+# path the one-hop read follows) to a target declaring both sections well-formed: the link PASS
+# line, no contract-file FAIL or WARN, both validator PASS lines, rc 0.
+cl_followed_row() {
+  local name="$1" text="$2" dir
+  dir="$(mk_repo "$name" gov-declared verbatim)"
+  cn_contract "$dir"
+  case "$text" in
+    */*) mkdir -p "$dir/${text%/*}" ;;
+  esac
+  mv "$dir/CLAUDE.md" "$dir/${text#./}"
+  ln -s "$text" "$dir/CLAUDE.md"
+  (cd "$dir" && git add -A) >/dev/null
+  seed_commit "$dir" >/dev/null
+  [ -L "$dir/CLAUDE.md" ] || { __ok=0; __why="${__why}$text: CLAUDE.md is not a symlink\n"; }
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "PASS  contract file: CLAUDE.md is a symlink"
+  expect_absent "FAIL  contract file"
+  expect_absent "WARN  contract file"
+  expect "PASS  governance paths: 3 declared glob(s)"
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+}
+
+# contract-link-followed — links the one-hop rule follows (a bare name, a ./ prefix, one directory
+# down) draw the link PASS and leave both validators as before; a followed link whose target's
+# reserve section is malformed keeps the link PASS and gets the existing reserve WARN, never a
+# contract-file WARN (the probe's malformed-section arm); a committed regular file draws no
+# contract-file line at all.
+# mutant:613-link-malformed-arm — dropping the malformed-section arm turns a followed link whose
+#   target has a malformed reserve section into a contract-file could-not-check WARN with both
+#   validators skipped.
+case_contract_link_followed() {
+  cl_followed_row contract-link-followed-bare AGENTS.md
+  cl_followed_row contract-link-followed-dot ./AGENTS.md
+  cl_followed_row contract-link-followed-dir docs/AGENTS.md
+  local dir
+  dir="$(mk_repo contract-link-followed-malformed base verbatim)"
+  cat >> "$dir/CLAUDE.md" <<'EOF'
+
+## Autonomy reserve
+```
+src/[0-9]*.sql
+```
+EOF
+  mv "$dir/CLAUDE.md" "$dir/AGENTS.md"
+  ln -s AGENTS.md "$dir/CLAUDE.md"
+  (cd "$dir" && git add -A) >/dev/null
+  seed_commit "$dir" >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect "PASS  contract file: CLAUDE.md is a symlink"
+  expect "WARN  autonomy reserve: section is malformed (unreadable-glob: src/[0-9]*.sql)"
+  expect_absent "WARN  contract file"
+  expect_absent "FAIL  contract file"
+  dir="$(mk_repo contract-link-regular gov-declared verbatim)"
+  cn_contract "$dir"
+  (cd "$dir" && git add -A) >/dev/null
+  seed_commit "$dir" >/dev/null
+  run_doctor "$dir" "$stub_gh_dir:$PATH"
+  expect_rc 0
+  expect_absent "contract file:"
+  expect "PASS  governance paths: 3 declared glob(s)"
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+}
+
+# contract-link-unchecked — a committed, followable link whose probe cannot conclude (the fixture's
+# bin/reserve-paths.sh deleted, then replaced by a stub printing an output outside the recognised
+# shapes, or an exit 1 error whose first line is none the doctor recognises, or HEAD's tree listing
+# failing) is a could-not-check WARN, never a FAIL, rc 0, and both validators are skipped rather
+# than PASSed (fail closed).
+# mutant:613-link-error-arm-skips — dropping the skip from the unrecognised-error arm lets the
+#   governance and reserve checks PASS on a link the probe errored on.
+# mutant:613-link-tree-fail-skips — dropping the skip from the failed-tree-listing arm does the same.
+# mutant:613-link-unchecked-skips — dropping the skip from the could-not-check arm lets the
+#   governance and reserve checks PASS on a link the probe could not confirm.
+case_contract_link_unchecked() {
+  local dir mode
+  for mode in deleted bogus error tree-fail; do
+    dir="$(mk_repo contract-link-unchecked-$mode gov-declared verbatim)"
+    cn_contract "$dir"
+    mv "$dir/CLAUDE.md" "$dir/AGENTS.md"
+    ln -s AGENTS.md "$dir/CLAUDE.md"
+    (cd "$dir" && git add -A) >/dev/null
+    seed_commit "$dir" >/dev/null
+    case "$mode" in
+      deleted) rm "$dir/bin/reserve-paths.sh" ;;
+      bogus)
+        printf '#!/usr/bin/env bash\nprintf "bogus\\n"\nexit 0\n' > "$dir/bin/reserve-paths.sh"
+        chmod +x "$dir/bin/reserve-paths.sh"
+        ;;
+      error)
+        printf '#!/usr/bin/env bash\nprintf "oops\\n" >&2\nprintf "verdict=error\\n"\nexit 1\n' > "$dir/bin/reserve-paths.sh"
+        chmod +x "$dir/bin/reserve-paths.sh"
+        ;;
+      tree-fail)
+        # HEAD still resolves to a commit, but its root tree object is gone, so only the doctor's
+        # tree listing fails.
+        local tree
+        tree="$(cd "$dir" && git rev-parse 'HEAD^{tree}')"
+        rm -f "$dir/.git/objects/${tree%"${tree#??}"}/${tree#??}"
+        if (cd "$dir" && git cat-file -p 'HEAD^{tree}') >/dev/null 2>&1; then
+          __ok=0; __why="${__why}tree-fail: the root tree is still readable\n"
+        fi
+        ;;
+    esac
+    run_doctor "$dir" "$stub_gh_dir:$PATH"
+    expect_rc 0
+    expect "WARN  contract file: could not check"
+    expect_absent "FAIL  contract file"
+    expect_absent "PASS  contract file"
+    expect_absent "governance paths:"
+    expect_absent "autonomy reserve:"
+  done
+}
+
+# codex-doctor-contract-case — #617: --provider codex runs the contract-file name check too. The
+# index holds a root-level claude.md and no CLAUDE.md entry, next to a readable CLAUDE.md: one FAIL
+# naming the git mv, rc 1, the Codex checks still run, and the wording never claims the doctor
+# skips reserve or governance checks (the Codex doctor has neither).
+# mutant:617-contract-claude-only — gating the shared name check on the Claude provider again
+#   reproduces #617: the Codex doctor prints no FAIL and exits 0.
+case_codex_doctor_contract_case() {
+  mk_cx_doctor cx-doctor-contract-case
+  local cxstub="$tmpbase/cx-doctor-contract-case-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  cn_index_add "$cx_repo" claude.md
+  cn_expect_readable "codex" "$cx_repo"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect_rc 1
+  cn_expect_one_fail "codex"
+  expect "FAIL  contract file: git tracks it as 'claude.md', not CLAUDE.md"
+  expect "git mv claude.md CLAUDE.md"
+  expect "codex version:"
+  expect_absent "skips its reserve and governance checks"
+}
+
+# codex-doctor-contract-symlink — #613 on Codex: a committed CLAUDE.md symlink the one-hop read
+# rejects (a chain, A.md -> B.md) is the same FAIL, with Codex's provider-neutral wording.
+case_codex_doctor_contract_symlink() {
+  mk_cx_doctor cx-doctor-contract-symlink
+  local cxstub="$tmpbase/cx-doctor-contract-symlink-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  (
+    cd "$cx_repo" &&
+    mv CLAUDE.md B.md &&
+    ln -s B.md A.md &&
+    ln -s A.md CLAUDE.md &&
+    git add CLAUDE.md A.md B.md &&
+    git commit -q -m link
+  ) >/dev/null
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect_rc 1
+  expect "FAIL  contract file: CLAUDE.md is a symlink to 'A.md'"
+  expect "points at another symlink"
+  expect "codex version:"
+  expect_absent "skips its reserve and governance checks"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -8936,6 +9176,11 @@ cases=(
   "contract-name-exact|case_contract_name_exact|#614: the doctor with the index holding exactly CLAUDE.md, as a regular file and as a symlink to a tracked AGENTS.md -> no contract file line, rc 0, both PASS lines unchanged"
   "contract-name-untracked|case_contract_name_untracked|#614: the doctor with CLAUDE.md untracked, or only a nested docs/claude.md and a claude.md.bak tracked -> no contract file line, rc 0, both PASS lines unchanged"
   "contract-name-git-error|case_contract_name_git_error|#614: the doctor with a corrupt index -> WARN could not check, no contract file FAIL, rc 0, no governance paths or autonomy reserve line"
+  "contract-link-rejected|case_contract_link_rejected|#613: the doctor with a committed CLAUDE.md symlink the one-hop read rejects (absolute, escapes, inner dot segment, .//, linked directory, chained, missing, case-mismatched) -> a contract file FAIL naming the link and the reason, rc 1, no governance paths or autonomy reserve line"
+  "contract-link-followed|case_contract_link_followed|#613: the doctor with a committed CLAUDE.md symlink the one-hop read follows -> the link PASS, both validator PASS lines, rc 0; a malformed reserve in the target keeps the reserve WARN and adds no contract file WARN; a regular file draws no contract file line"
+  "contract-link-unchecked|case_contract_link_unchecked|#613: the doctor with a followable committed symlink whose probe cannot conclude (reserve-paths.sh deleted, or printing an unknown output) -> WARN could not check, no FAIL, rc 0, no governance paths or autonomy reserve line"
+  "codex-doctor-contract-case|case_codex_doctor_contract_case|#617: --provider codex with the index holding only claude.md -> the contract file name FAIL, rc 1, no claim of skipped reserve or governance checks"
+  "codex-doctor-contract-symlink|case_codex_doctor_contract_symlink|#613: --provider codex with a committed CLAUDE.md symlink chain -> the contract file symlink FAIL, rc 1, no claim of skipped reserve or governance checks"
   "codex-setup-fresh|case_codex_setup_fresh|#408: no AGENTS.md: rc 0, all five files wrote=, no AGENTS.md created, config.toml carries the CLAUDE.md fallback, and the three next: lines including codex --no-daemon"
   "codex-setup-idempotent|case_codex_setup_idempotent|#408: a second run gives only unchanged= lines and byte-identical files; --check afterward is rc 0 with no drift="
   "codex-setup-agents-roundtrip|case_codex_setup_agents_roundtrip|#408: each agent TOML's name/description/developer_instructions round-trips against agents/*.md, byte-identical body, no tools/model lines"
