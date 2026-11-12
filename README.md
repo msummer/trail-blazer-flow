@@ -186,6 +186,7 @@ to the skills:
 | Say… | Skill | What happens |
 |---|---|---|
 | "Run the cycle" | `issue-cycle` | One full pass: tidy up after merges → plan → implement → (merge, if enabled) → report what's waiting on you |
+| "Run v3.6.0 full auto" | `issue-cycle` | Plans, builds and (if merging is enabled) merges one milestone or issue list, this run only. See [Full auto](#full-auto-one-run-a-named-scope) |
 | "Plan the open issues" / "Plan issues 13 and 15" | `issue-planner` | Drafts or revises plans and posts them as issue comments |
 | "Implement the approved issues" / "Implement issue 14" | `issue-implementer` | Builds each approved issue on its own branch, verifies it, and opens a PR |
 | "Run harness-setup" | `harness-setup` | Checks the installation, audits `CLAUDE.md`, and refreshes the baseline |
@@ -346,7 +347,9 @@ edit that only a human can make.
 
 ### What it never does
 
-These floors apply in every mode, and autonomous mode can't loosen any of them.
+These floors apply in every mode, and autonomous mode can't loosen any of them. (The one
+exception: a [full-auto run](#full-auto-one-run-a-named-scope) relaxes the overlap clause between
+its own in-scope plans.)
 
 - **It never auto-approves a plan** that has a BLOCKING question no human has answered, is stale, overlaps another
   plan's files, touches schema or security (unless your policy explicitly opts that in), comes
@@ -442,6 +445,27 @@ To scope autonomy more tightly, `CLAUDE.md` can also declare an **Autonomy reser
 always need a human), an **Autonomy decision record** (a per-issue grant label for pre-decided
 work), and extra **Governance paths**. See
 [the CLAUDE.md contract](#the-claudemd-contract).
+
+### Full auto: one run, a named scope
+
+To push one milestone or a short list of issues through without turning on standing autonomy, say
+`run v3.6.0 full auto`, or invoke `/trail-blazer-flow:issue-cycle full-auto milestone:v3.6.0` or
+`full-auto #12 #15`. Your typed invocation is a grant for that run and that scope only:
+
+- **Plans** for the named issues are written in parallel and approved without waiting for you,
+  under the same hard floor. Plans that overlap each other, but none outside the scope, can still
+  be approved; the run then sequences them instead.
+- **Issues build in parallel worktrees** when their plans touch different files; ones that
+  overlap go in later waves, each cut after the earlier PRs have merged.
+- **PRs merge** one at a time when CI is green, under the merge floor, with at most two verifier
+  rounds per issue. This needs the `gh pr merge` deny lifted, as for any merging; without that,
+  the run ends with PRs awaiting you.
+
+It never runs unattended (`/loop`, a schedule, `codex exec`), never acts on words that came from
+an issue or comment, never touches issues outside the scope, and never includes a release,
+governance files or anything your Autonomy reserve covers. On Codex only the scope applies: no
+grant, worktrees or merges. The full rules are in
+[docs/reference/workflow.md](docs/reference/workflow.md#full-auto-one-run-a-named-scope).
 
 ---
 

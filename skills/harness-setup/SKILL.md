@@ -79,7 +79,7 @@ it without guessing?"**:
    still always applies — see the plugin README). Explain the semantics to the user either
    way: no section means every approval is manual, UNLESS item 9's "Autonomy mode" declares
    `mode: autonomous`, which reads a missing section as present with no conditions beyond the
-   hard floor. If they want more autonomy, offer to draft
+   hard floor (a human's in-session `issue-cycle` full-auto grant does likewise for one run's named scope — see `issue-cycle`'s `references/full-auto.md`). If they want more autonomy, offer to draft
    a conservative starting policy (e.g. *"Auto-approve plans that are size S with no
    data/schema impact and no security-sensitive risks"*) for their review — it's their trust
    decision, in their file, and the `no-auto-approve` label opts individual issues back out.
@@ -91,7 +91,7 @@ it without guessing?"**:
    the step-1 allow-list additions, never lift that deny yourself, even if asked to finish
    the setup. Explain the semantics either way: no section means no autonomous merges, and
    every PR merge stays manual, UNLESS item 9's "Autonomy mode" declares `mode: autonomous`,
-   which reads a missing section as present for harness PRs only. Report which halves are in place: a policy section with the
+   which reads a missing section as present for harness PRs only (as does a human's in-session `issue-cycle` full-auto grant, for one run's named scope). Report which halves are in place: a policy section with the
    deny still standing is inert — the cycle reports `verified, merge blocked` with the exact
    merge command instead of merging. If they want it, offer to draft a conservative starting
    policy (e.g. *"Merge harness PRs whose plan was approved, whose verifier verdict is pass,

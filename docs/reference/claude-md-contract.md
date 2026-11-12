@@ -28,11 +28,13 @@ generic subagents need:
 
    The hard floor always applies on top (no BLOCKING questions — none answered by the
    orchestrator itself, except a granted issue's record-citing answer, see item 8 below — not
-   stale, no overlap, schema/security work only if explicitly opted in, and the issue's author is
+   stale, no overlap (a full-auto run narrows that to overlap with a plan outside its scope),
+   schema/security work only if explicitly opted in, and the issue's author is
    a maintainer), every auto-approval is audited with an issue comment, and the `no-auto-approve`
    label opts any issue out. **No section means no auto-approval** — this is a trust decision that
    belongs in your file, not the plugin's (or "Autonomy mode", item 9, which reads a missing
-   section as present with no conditions beyond the hard floor above).
+   section as present with no conditions beyond the hard floor above, or a human's in-session
+   full-auto grant for one run, see [workflow.md](workflow.md)).
 
 5. **Merge autonomy policy** (optional) — a section titled exactly "Merge autonomy policy"
    stating which PRs the `issue-cycle` merge pass may merge on your behalf, e.g.:
@@ -91,7 +93,8 @@ generic subagents need:
    parks the PR for you instead of merging past it (#206) — one merge at a time with
    re-verification between, every merge audited in the cycle report). **No section means no
    autonomous merges** — behavior is exactly the
-   pre-1.5 default — UNLESS "Autonomy mode" (item 9) declares `mode: autonomous`, in which case a
+   pre-1.5 default — UNLESS a human's in-session full-auto grant covers the PR (see
+   [workflow.md](workflow.md)), or "Autonomy mode" (item 9) declares `mode: autonomous`, in which case a
    missing section here is read as present for harness PRs only (never Dependabot, never an
    opt-in for a repo with no CI). **"No checks configured" is not green.** A repo with no CI wired up gets a
    "no checks configured" result from `gh pr checks`, and the hard floor above treats that the
@@ -378,7 +381,7 @@ generic subagents need:
      — see `skills/issue-cycle/references/serial-train.md` for the full procedure. It drains any
      open harness PRs left over from earlier passes first, then carries each ready issue through
      implement → verify → PR → CI → the merge floor → merge → post-merge re-verification before
-     the next branch is cut; worktree-parallel mode is never entered inside the train. A held PR
+     the next branch is cut; worktree-parallel mode is never entered inside the train (a full-auto run's waves aside — see [workflow.md](workflow.md)'s "Full auto"). A held PR
      moves the train on to the next issue; a merge-halting event (e.g. a merge denial or an
      unconfirmed merge) makes the rest of the run implement-only, opening PRs but attempting no
      further merge; a train-stopping event (a red baseline after a merge, or a stop-switch stop)
@@ -392,7 +395,7 @@ generic subagents need:
      applies at most one update-branch (and its CI wait) — with the deny still in place, guard
      (c)'s denial then stops merging for the run.
      Outside this mode, the
-     merge pass is unchanged: one merge per pass, no update-branch.
+     merge pass is unchanged: one merge per pass, no update-branch — except in a full-auto run, which runs this train with its own differences (see [workflow.md](workflow.md)'s "Full auto").
 
    `check-harness.sh` prints exactly one verdict line whenever `CLAUDE.md` exists — off (no
    section), autonomous (naming the effective kickback budget), or inert (section present, no

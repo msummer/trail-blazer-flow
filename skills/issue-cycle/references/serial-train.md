@@ -1,8 +1,8 @@
-# Serial merge train (Autonomy mode only)
+# Serial merge train (Autonomy mode, or as a full-auto run directs)
 
 This file is the full serial-train procedure for the issue-cycle skill (ADR 0001 decision 7,
 folding in #257's update-branch fallback). Eligibility for this mode is decided in `SKILL.md`,
-not here — read this file only when step 2 there has told you to. Everything this file invokes
+not here — read this file only when step 2 there, or `full-auto.md`, has told you to. Everything this file invokes
 stays defined where it already is: step 3's floor, guards (a)–(e), the pre-first-merge recheck,
 the status line and ledger column, and the implementer's own step 2. This file only orders them
 and adds the update-branch fallback below. Merge authority stays defined in step 3 alone
@@ -17,7 +17,9 @@ runs — is discovered at guard (c), exactly as it is today. So with the `gh pr 
 in place the train still runs, but the fallback's own eligibility rule (below) allows at most one
 update-branch and its CI wait before a merge is confirmed; guard (c)'s denial then makes the rest
 of the run merge-halting (the doctor WARNs on this half-activated setup). Never otherwise: outside this mode, steps 2 and 3 run exactly as `SKILL.md` states, one
-merge per pass, no update-branch.
+merge per pass, no update-branch — except that `references/full-auto.md` also runs this
+procedure, with the differences it lists (in-scope drain, waves in worktree mode); outside those,
+everything here applies as written.
 
 ## Stop-check mapping
 

@@ -166,7 +166,7 @@ user to review and commit; **never commit or push without explicit approval**):
    Reference `docs/PROJECT-BRIEF.md` for product context. Draft lean: the contract sections
    plus the non-obvious — not a tour of the planned tree. If the user opted into plan
    auto-approval during the interview, include the "Plan auto-approval policy" section they
-   agreed to; otherwise leave it out (absent section = fully manual approvals).
+   agreed to; otherwise leave it out (absent section = manual approvals, bar a human's full-auto grant).
 5. **The issue backlog** (`gh issue create`, in dependency order). Shape:
    - **Issue #1 is the walking skeleton:** stand up the project skeleton, wire the toolchain,
      and make a thin end-to-end slice (e.g. "app boots / one endpoint returns / one test runs")
