@@ -155,7 +155,8 @@ fifth command, but it is not part of `dev/selfcheck.sh` itself; run it by hand w
 
 `dev/planning-tests.sh` is a separate negative-test harness for both of this repo's discovery
 scripts, `bin/find-planning-work.sh` and `bin/find-implementation-work.sh`, for their
-consumer, `bin/harness-status.sh`, and for the merge floor, `bin/merge-floor.sh`: it builds
+consumer, `bin/harness-status.sh`, for the merge floor, `bin/merge-floor.sh`, and for the tracker
+projection, `bin/tracker-sync.sh`: it builds
 throwaway fixture directories under `mktemp`, with a stub `gh` on `PATH`, and runs the real
 script(s) against each, pinning the comment-
 and issue-author trust gate, plan selection, plan-binding approval provenance,
@@ -167,15 +168,21 @@ scripts — so an in-place mutant to either discovery script is reachable only t
 own `run_status` fixtures, never Part 14's. Part 16 runs a copy of `bin/merge-floor.sh` beside
 canned stand-ins for its three sibling scripts (decoy copies of them on `PATH` prove it resolves
 siblings from its own directory only), with a stub `git` as well as a stub `gh`, one fixture per
-check (passing, failing, failing closed), the retry-once rule, and a never-mutates case. The stub
+check (passing, failing, failing closed), the retry-once rule, and a never-mutates case. Part 17
+runs the real `bin/tracker-sync.sh` against a stub `gh`, `git` and `date`: the "Tracker" section's
+absent and malformed tokens, the snapshot's state precedence and schema, every query site failing
+closed (a stale `state.json` removed), the size cap, and that it never writes to GitHub or the
+tracked tree. The stub
 validates every `--json` field list a call
 sends against `gh`'s own documented field set, a family of `reject-<site>(-once)` fixture
 markers pins a bounded-retry-then-fail-closed shape at each script's batch `gh` call sites (the
 implementer script's `--issue <n>` prefetch is deliberately not retried, pinned by its own
-fixture), and a stub `sleep` keeps the suite's wall clock free of the real backoff wait. It runs
+fixture), `bin/tracker-sync.sh` retries none of its queries (Part 17's `reject-<site>` markers pin
+a fail-closed skip on the first failure), and a stub `sleep` keeps the suite's wall clock free of the real backoff wait. It runs
 in CI as the sixth command, but it is not part of `dev/selfcheck.sh` itself; run it by hand
 whenever `bin/find-planning-work.sh`, `bin/find-implementation-work.sh`,
-`bin/harness-status.sh`, or `bin/merge-floor.sh` changes.
+`bin/harness-status.sh`, `bin/merge-floor.sh`, `bin/tracker-sync.sh`, or
+`templates/tracker/index.html` changes.
 
 `dev/lock-tests.sh` is a separate negative-test harness for `bin/harness-lock.sh`, the
 single-flight lock that guards against two harness cycles running concurrently in one checkout:

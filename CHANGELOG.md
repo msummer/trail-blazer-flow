@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #622: opt-in live tracker (`tracker` skill, `bin/tracker-sync.sh`, `templates/tracker/`, a
+  "Tracker" CLAUDE.md section). Consumer step: re-copy the permissions block (new
+  `Bash(tracker-sync.sh:*)`); on Codex, re-run `bin/codex-setup.sh`.
 - #613, #617: the doctor FAILs a committed `CLAUDE.md` symlink the one-hop read rejects, naming the
   link and the reason, and `--provider codex` now runs the contract-file name check too.
 - #533: the run journal records why a run stopped early (`stage=run outcome=stopped reason=<slug>`,

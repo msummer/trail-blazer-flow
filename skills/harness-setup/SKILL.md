@@ -184,6 +184,8 @@ Summarise for the user:
   effective kickback budget / inert).
 - Verification baseline — the exact commands and their green outcomes, and confirmation that
   `.claude/BASELINE.md` was written (and is gitignored).
+- Tracker — a "Tracker" section present (its URL) or absent; if absent, offer to create one
+  (the `tracker` skill; private by default).
 - Remaining human items — typically: branch protection, allow-list confirmation, CLAUDE.md
   draft approval.
 - An explicit closing line: whether the repo is **ready** for `issue-planner` /

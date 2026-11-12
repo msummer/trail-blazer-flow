@@ -37,6 +37,7 @@ amendment (5), the same Codex CLI version, macOS).
 | The merge pass and merge autonomy | **Not supported** | Every merge on Codex is by hand; `gh pr merge` is additionally `forbidden` by the installed rules, verified live at the gate |
 | Autonomy mode | **Not supported** | Read as absent on Codex: no implied auto-approval, no `--carry-over`, no serial train |
 | `project-kickoff` and standalone `test-ratchet` | **Supported, not live-verified** | Codex path added after the v3.0.0 gate (#415) — see "`project-kickoff` on Codex" and "Standalone `test-ratchet` on Codex" below; never run live on Codex |
+| The live tracker (`tracker` skill) | **Not supported** | Codex has no `Artifact`/`ArtifactData` tools: the skill and the `issue-cycle` tracker step print one skip line and change nothing. `tracker-sync.sh` is gated like the other `gh`-calling scripts, but nothing on Codex pushes its snapshot |
 | Linux, Windows, the Codex desktop app | **Not verified** | The gate ran on macOS only |
 
 ## Setup
@@ -109,7 +110,7 @@ rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three 
 - **Gated** — the harness scripts that call `gh` (directly, or through `harness-status.sh`)
   or write inside `.git` (`check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
-  `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`) each get an `allow` rule on their
+  `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`, `tracker-sync.sh`) each get an `allow` rule on their
   bare name **plus** a `host_executable` pin to this install's own absolute `bin/` path. The pin
   matters: an ungated bare-name rule matches *any* file with that basename, anywhere — including
   one a subagent writes into the workspace — so every `.sh` ALLOW rule in the installed file is
@@ -811,7 +812,7 @@ Report the resolved root once, in the run summary.
 - **Gated** (run outside the sandbox only through the installed rules — see "Rules" above):
   `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
-  `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`.
+  `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`, `tracker-sync.sh`.
 - **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, `reserve-paths.sh`,
   and `codex-setup.sh`, whose write mode runs once from a normal terminal, never in-session, while
   its read-only `--check` runs in-session.
@@ -1009,6 +1010,12 @@ still applies.
    already includes them); the rules file never is.
 6. **Step 6:** hand off unchanged — each next skill runs in a `codex --no-daemon` session under
    the rest of this section.
+
+### The tracker step on Codex
+
+`issue-cycle`'s closing tracker sync (the `tracker` skill) has no artifact tools to run on Codex:
+print `tracker: skipped — artifact tools unavailable in this session` in the report, run no
+`tracker-sync.sh`, and carry on.
 
 ### Standalone `test-ratchet` on Codex
 

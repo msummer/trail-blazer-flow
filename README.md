@@ -191,6 +191,7 @@ to the skills:
 | "Run harness-setup" | `harness-setup` | Checks the installation, audits `CLAUDE.md`, and refreshes the baseline |
 | "Start a new project" | `project-kickoff` | The greenfield on-ramp ([Path A](#path-a--start-a-brand-new-project)) |
 | "Run the test ratchet" | `test-ratchet` | Files issues that close test-coverage gaps. Opt-in, see [the CLAUDE.md contract](#the-claudemd-contract) |
+| "Create a tracker" / "Sync the tracker" | `tracker` | Creates a private live page of issue states, PRs and milestone progress, and refreshes it from GitHub. Opt-in, see [docs/reference/tracker.md](docs/reference/tracker.md) |
 
 You can also call a skill directly, for example `/trail-blazer-flow:issue-cycle`.
 
@@ -463,6 +464,7 @@ item, including every hard floor, are in
 | 8 | `Autonomy decision record` | Optional | A human-applied grant label, plus the record an issue body must carry to qualify |
 | 9 | `Autonomy mode` | Optional | `mode: autonomous` turns items 4 and 5 on together (see [Autonomous mode](#autonomous-mode)) |
 | 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
+| 11 | `Tracker` | Optional | The URL of the repo's live tracker page, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
 
 Example policy sections:
 
@@ -556,6 +558,8 @@ The recipe, in the same order the gate used:
 - No merge autonomy and no Autonomy mode: every PR merge is by hand, and `gh pr merge` is
   additionally `forbidden` by the installed rules.
 - No worktree-parallel mode: sessions stay sequential.
+- No live tracker: Codex has no artifact tools, so the `tracker` skill and the cycle's tracker step
+  print one skip line.
 - Unattended runs are scheduled, not autonomous: a macOS LaunchAgent runs
   `bin/codex-scheduled-run.sh` on an interval, and each run plans, implements, verifies and opens
   PRs but never merges. The checkout's `origin` must authenticate with no prompt (an SSH key, or a
@@ -569,7 +573,7 @@ The recipe, in the same order the gate used:
   `codex exec` and scheduled unattended runs through the LaunchAgent; `project-kickoff` and
   standalone `test-ratchet` (not live-verified).
 - **Not supported:** the default TUI's managed daemon, worktree-parallel mode, the merge pass and
-  merge autonomy, and Autonomy mode.
+  merge autonomy, Autonomy mode, and the live tracker.
 - **Not verified:** Linux, Windows, and the Codex desktop app.
 
 ---

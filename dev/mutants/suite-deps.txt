@@ -39,6 +39,8 @@ dev/planning-tests.sh       bin/harness-status.sh
 dev/planning-tests.sh       bin/harness-stop.sh
 dev/planning-tests.sh       bin/reconcile-ledger.sh
 dev/planning-tests.sh       bin/merge-floor.sh
+dev/planning-tests.sh       bin/tracker-sync.sh
+dev/planning-tests.sh       templates/tracker/*
 
 # cleanup-tests.sh runs bin/cleanup-after-merge.sh only.
 dev/cleanup-tests.sh        bin/cleanup-after-merge.sh

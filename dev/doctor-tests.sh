@@ -5173,7 +5173,7 @@ case_codex_setup_rules_gated() {
     | sed -E 's/^host_executable\(name = "([a-z-]+\.sh)"/\1/' | sort -u)"
   want_names="$(printf '%s\n' check-decision-record.sh check-harness.sh cleanup-after-merge.sh \
     find-implementation-work.sh find-planning-work.sh harness-lock.sh harness-status.sh \
-    harness-stop.sh merge-floor.sh reconcile-ledger.sh setup-labels.sh | sort -u)"
+    harness-stop.sh merge-floor.sh reconcile-ledger.sh setup-labels.sh tracker-sync.sh | sort -u)"
   [ "$sh_names" = "$want_names" ] || { __ok=0; __why="${__why}allow-rule .sh names != the listed scripts\ngot:\n$sh_names\n"; }
   [ "$hx_names" = "$want_names" ] || { __ok=0; __why="${__why}host_executable names != the listed scripts\ngot:\n$hx_names\n"; }
   local n

@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>@REPO_NAME@ tracker</title>
+<style>
+:root {
+  color-scheme: light dark;
+  --bg: #ffffff;
+  --fg: #1f2328;
+  --muted: #59636e;
+  --card: #f6f8fa;
+  --line: #d1d9e0;
+  --accent: #0969da;
+  --done: #1a7f37;
+  --active: #8250df;
+  --wait: #9a6700;
+  --bad: #cf222e;
+  --track: #e6eaee;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0d1117;
+    --fg: #e6edf3;
+    --muted: #9198a1;
+    --card: #151b23;
+    --line: #3d444d;
+    --accent: #4493f8;
+    --done: #3fb950;
+    --active: #ab7df8;
+    --wait: #d29922;
+    --bad: #f85149;
+    --track: #262c36;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0d1117;
+  --fg: #e6edf3;
+  --muted: #9198a1;
+  --card: #151b23;
+  --line: #3d444d;
+  --accent: #4493f8;
+  --done: #3fb950;
+  --active: #ab7df8;
+  --wait: #d29922;
+  --bad: #f85149;
+  --track: #262c36;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  padding: 16px;
+  background: var(--bg);
+  color: var(--fg);
+  font: 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  overflow-wrap: anywhere;
+}
+main { max-width: 960px; margin: 0 auto; }
+h1 { font-size: 1.4rem; margin: 0 0 4px; }
+h2 { font-size: 1.1rem; margin: 24px 0 8px; }
+h3 { font-size: 1rem; margin: 16px 0 6px; }
+a { color: var(--accent); }
+.muted { color: var(--muted); }
+.notice { background: var(--card); border: 1px solid var(--wait); border-radius: 8px; padding: 8px 12px; margin: 12px 0; }
+.stale { color: var(--wait); font-weight: 600; }
+.meta { display: flex; flex-wrap: wrap; gap: 4px 12px; color: var(--muted); font-size: 0.9rem; }
+.card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
+.row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-top: 1px solid var(--line); }
+.row:first-child { border-top: 0; }
+.row .title { flex: 1 1 14rem; min-width: 0; }
+.badge { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
+.badge[data-s="done"] { color: var(--done); border-color: var(--done); }
+.badge[data-s="pr-open"], .badge[data-s="approved"] { color: var(--active); border-color: var(--active); }
+.badge[data-s="blocked"], .badge[data-s="needs-human"] { color: var(--bad); border-color: var(--bad); }
+.badge[data-s="held"], .badge[data-s="waiting"], .badge[data-s="in-progress"], .badge[data-s="unconfirmed"] { color: var(--wait); border-color: var(--wait); }
+.bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; margin: 6px 0; }
+.bar > span { display: block; height: 100%; background: var(--done); }
+button { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
+.err { color: var(--bad); }
+</style>
+</head>
+<body>
+<main>
+  <h1>@REPO_NAME@ tracker</h1>
+  <div id="app"><p class="muted">Loading...</p></div>
+</main>
+<script>
+(function () {
+  "use strict";
+  var app = document.getElementById("app");
+  var model = { harness: null, sections: [], people: [], canWrite: false, db: null };
+  var failed = false;
+
+  function el(tag, cls, text) {
+    var n = document.createElement(tag);
+    if (cls) { n.className = cls; }
+    if (text !== undefined && text !== null) { n.textContent = String(text); }
+    return n;
+  }
+  function safeHref(v) {
+    var s = String(v == null ? "" : v);
+    if (s.indexOf("https:") !== 0) { return null; }
+    try {
+      var u = new URL(s);
+      return u.protocol === "https:" ? u.href : null;
+    } catch (e) { return null; }
+  }
+  function link(text, href) {
+    var h = safeHref(href);
+    if (!h) { return el("span", null, text); }
+    var a = el("a", null, text);
+    a.setAttribute("href", h);
+    a.setAttribute("target", "_blank");
+    a.setAttribute("rel", "noopener noreferrer");
+    return a;
+  }
+  var KNOWN = ["done", "not-planned", "needs-human", "blocked", "pr-open", "approved", "held", "planned", "unplanned", "open", "in-progress", "unconfirmed", "waiting", "merged", "closed"];
+  function badge(s) {
+    var b = el("span", "badge", s);
+    b.setAttribute("data-s", KNOWN.indexOf(s) >= 0 ? s : "other");
+    return b;
+  }
+  function docExists(d) { return typeof d.exists === "function" ? d.exists() : !!d.exists; }
+  function num(v) { var n = Number(v); return isFinite(n) ? n : 0; }
+
+  function issueRow(issue, repoUrl, byNum) {
+    var row = el("div", "row");
+    var t = el("div", "title");
+    t.appendChild(link("#" + issue.number, issue.url || (repoUrl ? repoUrl + "/issues/" + issue.number : "")));
+    t.appendChild(document.createTextNode(" " + (issue.title || "")));
+    row.appendChild(t);
+    row.appendChild(badge(String(issue.state)));
+    if (issue.pr) {
+      var p = el("span", "muted");
+      p.appendChild(link("PR #" + issue.pr.number, issue.pr.url));
+      p.appendChild(document.createTextNode(" " + (issue.pr.state || "")));
+      row.appendChild(p);
+    }
+    if (issue.waiting) {
+      var open = (issue.blockedBy || []).filter(function (b) { return b.open; });
+      var w = el("span", "muted", "waiting on ");
+      open.forEach(function (b, i) {
+        if (i > 0) { w.appendChild(document.createTextNode(", ")); }
+        w.appendChild(link("#" + b.number, b.url));
+      });
+      row.appendChild(w);
+    }
+    return row;
+  }
+
+  function header(h) {
+    var box = el("div");
+    var meta = el("div", "meta");
+    var r = el("span");
+    r.appendChild(link(String(h.repo || ""), h.repoUrl));
+    meta.appendChild(r);
+    var at = el("span", null, "checked " + String(h.checkedAt || "unknown"));
+    var ts = Date.parse(h.checkedAt || "");
+    if (!isNaN(ts) && Date.now() - ts > 24 * 3600 * 1000) {
+      at.appendChild(document.createTextNode(" "));
+      at.appendChild(el("span", "stale", "(stale)"));
+    }
+    meta.appendChild(at);
+    meta.appendChild(el("span", null, String(h.defaultBranch || "") + " @ " + String(h.mainSha || "").slice(0, 7)));
+    if (h.truncated) { meta.appendChild(el("span", "stale", "truncated")); }
+    box.appendChild(meta);
+    var c = h.counts || {};
+    var parts = Object.keys(c).map(function (k) { return k + " " + c[k]; });
+    box.appendChild(el("p", "muted", parts.join(" | ")));
+    return box;
+  }
+
+  function peopleBlock() {
+    var items = model.people.slice().sort(function (a, b) {
+      return (a.data.state === "done" ? 1 : 0) - (b.data.state === "done" ? 1 : 0);
+    });
+    if (items.length === 0) { return null; }
+    var box = el("div");
+    box.appendChild(el("h2", null, "People"));
+    items.forEach(function (p) {
+      var d = p.data;
+      var c = el("div", "card");
+      var top = el("div", "row");
+      top.appendChild(el("div", "title", String(d.title || p.id) + (d.who ? " (" + d.who + ")" : "")));
+      top.appendChild(badge(String(d.state || "open")));
+      if (model.canWrite) {
+        if (d.state === "done") { top.appendChild(toggleButton(p, "open", "Reopen")); }
+        else { top.appendChild(toggleButton(p, "done", "Done")); }
+      }
+      c.appendChild(top);
+      if (d.note) { c.appendChild(el("div", "muted", d.note)); }
+      box.appendChild(c);
+    });
+    return box;
+  }
+  function toggleButton(p, next, label) {
+    var b = el("button", null, label);
+    var msg = el("span", "err");
+    b.addEventListener("click", function () {
+      var data = {};
+      Object.keys(p.data).forEach(function (k) { data[k] = p.data[k]; });
+      data.state = next;
+      data.updated = new Date().toISOString();
+      msg.textContent = "";
+      model.db.doc("people/" + p.id).set(data).catch(function (e) {
+        msg.textContent = " could not save: " + String(e && e.message ? e.message : e);
+      });
+    });
+    var wrap = el("span");
+    wrap.appendChild(b);
+    wrap.appendChild(msg);
+    return wrap;
+  }
+
+  function sectionBlock(s, byNum, repoUrl) {
+    var d = s.data;
+    var box = el("div");
+    box.appendChild(el("h2", null, String(d.title || s.id)));
+    if (d.kind === "phases") {
+      (d.phases || []).forEach(function (ph) {
+        box.appendChild(el("h3", null, String(ph.name || "")));
+        if (ph.text) { box.appendChild(el("p", "muted", ph.text)); }
+        var c = el("div", "card");
+        (ph.issues || []).forEach(function (n) {
+          var issue = byNum[n];
+          if (issue) { c.appendChild(issueRow(issue, repoUrl, byNum)); }
+          else { c.appendChild(el("div", "row", "#" + n)); }
+        });
+        box.appendChild(c);
+      });
+    } else if (d.kind === "list") {
+      var c2 = el("div", "card");
+      (d.items || []).forEach(function (it) {
+        var row = el("div", "row");
+        row.appendChild(el("div", "title", it.text || ""));
+        (it.issues || []).forEach(function (n) {
+          var issue = byNum[n];
+          row.appendChild(link("#" + n, issue ? issue.url : (repoUrl ? repoUrl + "/issues/" + n : "")));
+          if (issue) { row.appendChild(badge(String(issue.state))); }
+        });
+        c2.appendChild(row);
+      });
+      box.appendChild(c2);
+    } else {
+      String(d.text || "").split("\n").forEach(function (line) {
+        if (line) { box.appendChild(el("p", null, line)); }
+      });
+    }
+    if (d.source) { box.appendChild(el("p", "muted", "source: " + d.source)); }
+    return box;
+  }
+
+  function milestoneBlock(m, issues, repoUrl, byNum) {
+    var box = el("div");
+    var h = el("h2");
+    h.appendChild(link(String(m.title || ""), m.url));
+    box.appendChild(h);
+    var total = num(m.open) + num(m.closed);
+    var pct = total > 0 ? Math.round(100 * num(m.closed) / total) : 0;
+    box.appendChild(el("div", "muted", num(m.closed) + " of " + total + " closed" + (m.dueOn ? ", due " + String(m.dueOn).slice(0, 10) : "")));
+    var bar = el("div", "bar");
+    var fill = el("span");
+    fill.style.width = pct + "%";
+    bar.appendChild(fill);
+    box.appendChild(bar);
+    var c = el("div", "card");
+    issues.forEach(function (i) { c.appendChild(issueRow(i, repoUrl, byNum)); });
+    if (issues.length === 0) { c.appendChild(el("div", "muted", "No issues.")); }
+    box.appendChild(c);
+    return box;
+  }
+
+  function render() {
+    app.textContent = "";
+    var h = model.harness;
+    if (failed || !h) {
+      app.appendChild(el("div", "notice", failed ? "Live data unavailable: the tracker database could not be reached." : "Waiting for live data..."));
+      return;
+    }
+    app.appendChild(header(h));
+    var people = peopleBlock();
+    if (people) { app.appendChild(people); }
+    var issues = h.issues || [];
+    var byNum = {};
+    issues.forEach(function (i) { byNum[i.number] = i; });
+    model.sections.slice().sort(function (a, b) { return num(a.data.order) - num(b.data.order); })
+      .forEach(function (s) { app.appendChild(sectionBlock(s, byNum, h.repoUrl)); });
+    var known = {};
+    (h.milestones || []).forEach(function (m) {
+      known[m.number] = true;
+      var mine = issues.filter(function (i) { return i.milestone === m.number; });
+      app.appendChild(milestoneBlock(m, mine, h.repoUrl, byNum));
+    });
+    var rest = issues.filter(function (i) { return !known[i.milestone]; });
+    if (rest.length > 0) {
+      var box = el("div");
+      box.appendChild(el("h2", null, "No milestone"));
+      var c = el("div", "card");
+      rest.forEach(function (i) { c.appendChild(issueRow(i, h.repoUrl, byNum)); });
+      box.appendChild(c);
+      app.appendChild(box);
+    }
+  }
+
+  function collect(snap) {
+    var out = [];
+    snap.docs.forEach(function (d) { if (docExists(d)) { out.push({ id: d.id, data: d.data() || {} }); } });
+    return out;
+  }
+
+  async function start() {
+    if (!window.claude || typeof window.claude.use !== "function") { failed = true; render(); return; }
+    var timer = setTimeout(function () {
+      if (!model.harness) { failed = true; render(); }
+    }, 8000);
+    try {
+      var db = await window.claude.use("db");
+      var user = await window.claude.use("user");
+      model.db = db;
+      var w = await user.can("data.write");
+      if (w === null || w === undefined) { w = await user.canEdit(); }
+      model.canWrite = !!w;
+      db.doc("harness/state").onSnapshot(function (snap) {
+        model.harness = docExists(snap) ? snap.data() : null;
+        if (model.harness) { failed = false; clearTimeout(timer); }
+        render();
+      });
+      db.collection("sections").onSnapshot(function (snap) { model.sections = collect(snap); render(); });
+      db.collection("people").onSnapshot(function (snap) { model.people = collect(snap); render(); });
+    } catch (e) {
+      failed = true;
+      render();
+    }
+  }
+  render();
+  start();
+})();
+</script>
+</body>
+</html>
