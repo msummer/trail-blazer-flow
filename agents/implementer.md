@@ -130,6 +130,13 @@ the current branch, and return a clear report.
   checklists in CLAUDE.md.
 - **Leave the tree in a known state.** If you genuinely can't make the verification commands
   pass, report blocked and describe exactly what's failing and why.
+- **Long-running commands.** Run each command in the foreground with an explicit timeout, within
+  your shell tool's own limit (Claude Code's Bash: 10 minutes). Only a command that cannot finish
+  inside that limit runs in the background, and you wait for it only through your tool's own
+  completion notification — never a polling loop (`sleep` in an `until`/`while` loop, re-reading
+  an output file, or a `pgrep`/`ps` that can match the loop's own command line). Before your
+  report, every background command you started has finished or been stopped; name any you could
+  not stop, with its exact command, in Reviewer notes.
 - **Clean exit over thrashing when context runs low.** If you are approaching your context
   limit, stop cleanly and return `status: incomplete` with a `## Resume brief` rather than
   continuing to thrash — the orchestrator checkpoints your tree and relaunches a fresh context to

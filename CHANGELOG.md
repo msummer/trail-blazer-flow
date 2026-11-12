@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #638: the implementer and verifier run long commands in the foreground or wait for the completion
+  notification, never a polling loop, and leave nothing running; on Codex, re-run
+  `bin/codex-setup.sh` (`agents/*.md` changed).
 - #637: tracker Sync reads the snapshot version into the session's scratch directory (the platform
   refuses an out_dir under .git/), so syncs land; the page's counts become state-coloured
   chips (re-publish an existing page by hand); this repo's CLAUDE.md gains its Tracker section.
