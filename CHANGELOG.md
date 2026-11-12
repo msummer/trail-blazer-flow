@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #630: `project-kickoff` records the backlog's cross-issue dependencies as native GitHub issue
+  dependencies (an add-blocked-by pass after filing; fails soft on an older `gh`), so the
+  tracker shows them.
 - #622: opt-in live tracker (`tracker` skill, `bin/tracker-sync.sh`, `templates/tracker/`, a
   "Tracker" CLAUDE.md section). Consumer step: re-copy the permissions block (new
   `Bash(tracker-sync.sh:*)`); on Codex, re-run `bin/codex-setup.sh`.

@@ -19,6 +19,7 @@
 │   └── verifier.md               # plan-conformance reviewer (Opus 5.5); fresh context; restores anything it mutates; read-only git only, no gh, mechanically enforced
 ├── skills/
 │   ├── project-kickoff/SKILL.md  # greenfield on-ramp: interview → brief + CLAUDE.md + repo + backlog
+│   ├── project-kickoff/references/dependencies.md  # recording the backlog's dependencies as native GitHub links (read on demand)
 │   ├── harness-setup/SKILL.md    # one-time repo onboarding: doctor + CLAUDE.md audit + baseline
 │   ├── issue-planner/SKILL.md    # orchestrates planning (answers → revision → policy auto-approval)
 │   ├── issue-implementer/SKILL.md # orchestrates implementation → verification → PR (+ CI fix)

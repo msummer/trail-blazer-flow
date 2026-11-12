@@ -120,8 +120,8 @@ This is where you earn your place in the stack. Produce, in the chat for review:
   constraints — pick boring, proven defaults unless a requirement demands otherwise.
 - **A methodology** — branching/PR flow (the harness's: issue → plan → PR → human merge),
   testing approach, and what the verification commands will be once the skeleton exists.
-- **The proposed issue backlog** — see step 5 for shape. Show the list (titles + one-line
-  scope each) so the user approves the *plan of work*, not just the prose.
+- **The proposed issue backlog** — see step 5 for shape. Show the list (titles, one-line
+  scope, and which issues each waits on) so the user approves the *plan of work*, not just the prose.
 
 Present all of it together and ask for approval. Iterate on feedback. **Do not create the repo
 or any issues until the user approves.** Surface any remaining BLOCKING items explicitly — they
@@ -178,7 +178,9 @@ user to review and commit; **never commit or push without explicit approval**):
      acceptance criteria a planner can act on. **Resist over-producing** — a tight first slice
      beats a 40-issue waterfall; later work can be filed as the project takes shape.
    - Leave them **unlabelled** (`issue-planner` picks up anything without a `plan-*` label).
-     Note any cross-issue dependencies in the issue bodies.
+     Note any cross-issue dependencies in the issue bodies, then, once every issue exists,
+     record each as a native GitHub dependency (the tracker reads only those): follow
+     `references/dependencies.md` next to this SKILL.md; a failed link never stops the kickoff.
 
 Then run the doctor to confirm the mechanics:
 
@@ -213,7 +215,8 @@ drafted (pending the user's commit), and the backlog is filed — ready for plan
   approves the synthesized brief, architecture, and backlog.
 - **Never commit or push without explicit approval.** Project-owned files (`CLAUDE.md`,
   `docs/PROJECT-BRIEF.md`, `.claude/settings.json`) are left in the working tree for the user to
-  review and commit. Repo *creation* and *issue* creation are the user-approved GitHub actions.
+  review and commit. Repo *creation* and *issue* creation (with its dependency links) are the
+  user-approved GitHub actions.
 - **Nothing project-specific goes into the toolset files** (this skill, the agents, the plugin).
   Everything you learn about the project lands in `CLAUDE.md`, `docs/PROJECT-BRIEF.md`, or the
   issues — the same boundary every other skill respects.
