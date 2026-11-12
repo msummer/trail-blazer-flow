@@ -234,6 +234,15 @@ argument, exits 2 before any check runs; `-h`/`--help` exits 0.
   manual. When `CLAUDE.md` declares a "Merge autonomy policy" and/or "Autonomy mode" section, the
   PASS names them as not applying here; neither section's own verdict line (`merge autonomy:`,
   `autonomy mode:`) ever prints on Codex.
+- **Autonomy reserve** (#627). Runs the Claude doctor's validator, `reserve-paths.sh --check` by a
+  fixed path, when `CLAUDE.md` has an "Autonomy reserve" section or a "Plan auto-approval policy"
+  section. A malformed section is a WARN, because every implementation stops before verification
+  until it is fixed; a well-formed one PASSes with its glob count. The schema-path advice applies
+  only under a "Plan auto-approval policy" section, since `mode: autonomous` is read as absent on
+  Codex. It is skipped when a contract-file check found a problem (the contract-file line says
+  so). See [`claude-md-contract.md`](claude-md-contract.md) item 7. The "Governance paths"
+  section is not validated on Codex: only the merge pass reads it, and the merge pass never runs
+  here.
 
 The shared baseline check and the branch-protection check still run afterward. Branch protection
 is found through the classic `repos/<r>/branches/<b>/protection` endpoint or, when that call
@@ -256,7 +265,7 @@ unique union of every rule's contexts, and a `pull_request` rule maps to reviews
 Everything the settings-file union, toolchain, template-drift, `disableAllHooks`, and
 policy-activation sections check on Claude Code (`.claude/settings.json`, merge-autonomy
 activation, the test-suite ratchet, scoped autonomy, governance paths) is skipped entirely on
-Codex — none of those lines print. The doctor still writes only its two safe fixes (`chmod +x` on
+Codex — none of those lines print; the one exception is the Autonomy reserve validator above. The doctor still writes only its two safe fixes (`chmod +x` on
 harness scripts, seeding `.claude/LESSONS.md`); the Codex branch additionally creates and removes
 a temp dir under `${TMPDIR:-/tmp}` and briefly starts the user's own `codex app-server`, which may
 write Codex's own state under `CODEX_HOME` — the doctor sends it no write request.

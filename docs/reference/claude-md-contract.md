@@ -254,10 +254,10 @@ generic subagents need:
    verifier's reserve check is inert (`verdict=absent`).** What counts as reserved, and what a
    grant may override, stays this repo's decision.
 
-   On Claude Code, `check-harness.sh` validates the section with `reserve-paths.sh --check` (the
-   Codex doctor has no reserve check): a malformed section is a WARN naming the reason and the
-   entry, never a FAIL. Two contract-file checks run on both providers, and on Claude a finding of
-   either skips this check (and item 10's), so it never reports the section as declared while the
+   On both providers, `check-harness.sh` validates the section with `reserve-paths.sh --check`: a
+   malformed section is a WARN naming the reason and the entry, never a FAIL. Two contract-file
+   checks run on both providers, and a finding of either skips this check on both (and item 10's,
+   on Claude Code), so it never reports the section as declared while the
    implementer reads none. When HEAD's tree records `CLAUDE.md` as a symlink, the doctor reads it
    the one-hop way, through `reserve-paths.sh`'s diff mode run on HEAD, and FAILs a link that read
    rejects, naming the link text and the reason (a probe that cannot conclude is a WARN); a link
@@ -266,7 +266,7 @@ generic subagents need:
    `CLAUDE.md`, the doctor FAILs, naming `git mv claude.md CLAUDE.md`; an untracked `CLAUDE.md` is
    not reported.
    While plan auto-approval is active (a
-   "Plan auto-approval policy" section, or item 9's `mode: autonomous`) it also WARNs about tracked
+   "Plan auto-approval policy" section, or, on Claude Code only, item 9's `mode: autonomous`) it also WARNs about tracked
    schema paths (`migrations`, `alembic/versions`, `prisma/schema.prisma`, `*.sql`, as `git`
    lists them) that no reserve glob covers, whether or not a reserve is declared; a path a
    `not reserved:` line covers is reported as a PASS instead. The WARN is advice only.
@@ -464,7 +464,8 @@ generic subagents need:
     named exactly `CLAUDE.md` at the base tip, means only the built-in rules apply — not an
     error. A malformed section, or such a link, means the merge pass holds every PR
     (`verdict=error`, the reason in the hold message) until a human fixes it; `check-harness.sh`
-    WARNs, never FAILs, on a malformed section, naming the malformed reason (`no-fence`,
+    WARNs, never FAILs, on a malformed section (the Claude Code doctor only; the Codex doctor
+    never validates this section), naming the malformed reason (`no-fence`,
     `unterminated-fence`, `no-globs`, `negation`, `leading-slash`, or `bracket`) — or, with no
     section at all, PASSes `governance paths: none declared`, or, with a well-formed section,
     PASSes `governance paths: <n> declared glob(s)`. A `CLAUDE.md` symlink in HEAD's tree that the

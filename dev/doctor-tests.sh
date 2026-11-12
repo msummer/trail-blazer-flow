@@ -88,7 +88,7 @@
 # when the listing fails — and (#613) its HEAD symlink probe on both providers — when HEAD's tree
 # holds CLAUDE.md as a symlink it runs reserve-paths.sh's diff mode on HEAD and FAILs a link the
 # one-hop read rejects, WARNs when the probe cannot conclude — each of which skips both validators
-# above on Claude — and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
+# above on Claude and the reserve validator on Codex, where (#627) the reserve validator also runs — and (#408) bin/codex-setup.sh — the Codex compatibility installer, whose own
 # `--check` drift mode is #410's companion, hence living here rather than in a new suite — run
 # directly against a fake Codex plugin-cache install (mk_cx_plugin, a copy of this checkout's
 # bin/*.sh, agents/*.md and templates/codex.rules) and fixture repos it builds for that purpose
@@ -115,8 +115,9 @@
 # Codex doesn't load, FAILs; a key is sanitised before it's ever printed; an empty expected-hook
 # set — hooks/hooks.json missing, unreadable, or unparseable — FAILs before the exchange even
 # starts; never trusts anything itself), the manual-merge report, and the Codex-specific FAIL
-# arms on branch protection (a WARN on Claude Code) — plus that every settings/toolchain/policy
-# line is absent on Codex, and that an unrecognised argument (including a bare --provider with no
+# arms on branch protection (a WARN on Claude Code) — plus the Codex run of the reserve validator
+# (a malformed WARN, the schema advice only under a "Plan auto-approval policy" section, never a
+# governance line), and that every other settings/toolchain/policy line is absent on Codex, and that an unrecognised argument (including a bare --provider with no
 # value) exits 2 on both providers, and (#427) bin/codex-scheduled-run.sh — the launchd-driven
 # wrapper for one unattended `codex exec` pass, run directly (never through PATH, and never the
 # real `codex`) against a fixture repo with the Codex compatibility layer installed via run_cx, a
@@ -4475,16 +4476,20 @@ case_contract_link_unchecked() {
 
 # codex-doctor-contract-case — #617: --provider codex runs the contract-file name check too. The
 # index holds a root-level claude.md and no CLAUDE.md entry, next to a readable CLAUDE.md: one FAIL
-# naming the git mv, rc 1, the Codex checks still run, and the wording never claims the doctor
-# skips reserve or governance checks (the Codex doctor has neither).
+# naming the git mv, rc 1, the Codex checks still run, the reserve check is skipped even though a
+# well-formed section is declared, and the wording claims only the reserve check skipped (the Codex
+# doctor has no governance check).
 # mutant:617-contract-claude-only — gating the shared name check on the Claude provider again
 #   reproduces #617: the Codex doctor prints no FAIL and exits 0.
+# mutant:627-reserve-gate-off — dropping the $cm_name_ok gate from the shared reserve check makes
+#   the Codex doctor validate the section despite the contract-file FAIL.
 case_codex_doctor_contract_case() {
   mk_cx_doctor cx-doctor-contract-case
   local cxstub="$tmpbase/cx-doctor-contract-case-stub"
   mkdir -p "$cxstub"
   build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
   mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  cn_contract "$cx_repo"
   cn_index_add "$cx_repo" claude.md
   cn_expect_readable "codex" "$cx_repo"
   run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
@@ -4493,7 +4498,9 @@ case_codex_doctor_contract_case() {
   expect "FAIL  contract file: git tracks it as 'claude.md', not CLAUDE.md"
   expect "git mv claude.md CLAUDE.md"
   expect "codex version:"
-  expect_absent "skips its reserve and governance checks"
+  expect "; this doctor skips its reserve check until it is fixed"
+  expect_absent "autonomy reserve:"
+  expect_absent "governance"
 }
 
 # codex-doctor-contract-symlink — #613 on Codex: a committed CLAUDE.md symlink the one-hop read
@@ -4504,6 +4511,7 @@ case_codex_doctor_contract_symlink() {
   mkdir -p "$cxstub"
   build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
   mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  cn_contract "$cx_repo"
   (
     cd "$cx_repo" &&
     mv CLAUDE.md B.md &&
@@ -4517,7 +4525,9 @@ case_codex_doctor_contract_symlink() {
   expect "FAIL  contract file: CLAUDE.md is a symlink to 'A.md'"
   expect "points at another symlink"
   expect "codex version:"
-  expect_absent "skips its reserve and governance checks"
+  expect "; this doctor skips its reserve check until it is fixed"
+  expect_absent "autonomy reserve:"
+  expect_absent "governance"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -8513,6 +8523,7 @@ case_codex_doctor_healthy() {
   expect_absent "merge autonomy:"
   expect_absent "autonomy mode:"
   expect_absent "governance paths:"
+  expect_absent "autonomy reserve:"
   expect_absent "test-suite ratchet"
   local reqlog="$cxstub/requests.log" reqcount methods cwd3 clientname
   reqcount="$(grep -c . "$reqlog" 2>/dev/null)"
@@ -8881,6 +8892,82 @@ EOF
   expect_absent "autonomy mode: autonomous"
 }
 
+# codex-doctor-reserve-malformed — #627: an Autonomy reserve section with an unreadable entry is
+# the same malformed WARN on Codex as on Claude (rc stays 0), and a prose-only Governance paths
+# section, malformed on Claude, draws no governance line: that validator is Claude-only.
+# mutant:627-reserve-codex-off — dropping the Codex call site of the reserve check reproduces #627:
+#   a malformed section gets a clean Codex doctor run.
+case_codex_doctor_reserve_malformed() {
+  mk_cx_doctor cx-doctor-reserve-malformed
+  local cxstub="$tmpbase/cx-doctor-reserve-malformed-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  cat >> "$cx_repo/CLAUDE.md" <<'EOF'
+
+## Autonomy reserve
+```
+src/[0-9]*.sql
+```
+
+## Governance paths
+
+Prose only, no fenced list.
+EOF
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect_rc 0
+  expect "codex version:"
+  expect "WARN  autonomy reserve: section is malformed (unreadable-glob: src/[0-9]*.sql)"
+  expect_absent "governance paths:"
+  expect_absent "schema path(s)"
+}
+
+# codex-doctor-reserve-declared — #627: a well-formed reserve PASSes on Codex with its glob count,
+# and with no auto-approval and no schema file tracked there is no schema line.
+case_codex_doctor_reserve_declared() {
+  mk_cx_doctor cx-doctor-reserve-declared
+  local cxstub="$tmpbase/cx-doctor-reserve-declared-stub"
+  mkdir -p "$cxstub"
+  build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+  mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+  cn_contract "$cx_repo"
+  run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+  expect_rc 0
+  expect "PASS  autonomy reserve: 1 glob(s), 0 'not reserved:' line(s)"
+  expect_absent "schema path(s)"
+}
+
+# codex-doctor-reserve-schema — #627: on Codex the schema advice turns on only under a declared
+# "Plan auto-approval policy" section; `mode: autonomous` alone (read as absent on Codex) leaves a
+# tracked migration with no reserve line at all.
+# mutant:627-reserve-codex-auto-always — passing true instead of the Codex-side policy-section test
+#   turns the advice on for `mode: autonomous`-only and even reserve-less repos.
+case_codex_doctor_reserve_schema() {
+  local row cxstub
+  for row in mode policy; do
+    mk_cx_doctor "cx-doctor-reserve-schema-$row"
+    cxstub="$tmpbase/cx-doctor-reserve-schema-$row-stub"
+    mkdir -p "$cxstub"
+    build_stub_codex "$cxstub" reply "codex-cli 0.157.1"
+    mk_hooks_reply "$cxstub" "$cx_plugin" "$cx_top" trusted
+    mkdir -p "$cx_repo/db/migrations"
+    printf 'select 1;\n' > "$cx_repo/db/migrations/0001_init.sql"
+    (cd "$cx_repo" && git add db/migrations) >/dev/null
+    if [ "$row" = mode ]; then
+      printf '\n## Autonomy mode\n```\nmode: autonomous\n```\n' >> "$cx_repo/CLAUDE.md"
+    else
+      printf '\n## Plan auto-approval policy\n\nFixture stub policy.\n' >> "$cx_repo/CLAUDE.md"
+    fi
+    run_doctor_at "$cx_plugin" "$cx_repo" "$cxstub:$stub_gh_dir:$PATH" --provider codex
+    expect_rc 0
+    if [ "$row" = mode ]; then
+      expect_absent "autonomy reserve:"
+    else
+      expect "WARN  autonomy reserve: 1 schema path(s) outside the reserve while plan auto-approval is on: db/migrations/0001_init.sql"
+    fi
+  done
+}
+
 # codex-doctor-protection-missing — the branch-protection endpoint call itself fails (no document
 # at all) -> FAIL naming the branch, and rc 1 (a hard floor on Codex, unlike Claude's WARN).
 # mutant:410-protection-fail — turning the Codex arm's `bad` into `wrn` demotes every fixture that
@@ -9179,8 +9266,8 @@ cases=(
   "contract-link-rejected|case_contract_link_rejected|#613: the doctor with a committed CLAUDE.md symlink the one-hop read rejects (absolute, escapes, inner dot segment, .//, linked directory, chained, missing, case-mismatched) -> a contract file FAIL naming the link and the reason, rc 1, no governance paths or autonomy reserve line"
   "contract-link-followed|case_contract_link_followed|#613: the doctor with a committed CLAUDE.md symlink the one-hop read follows -> the link PASS, both validator PASS lines, rc 0; a malformed reserve in the target keeps the reserve WARN and adds no contract file WARN; a regular file draws no contract file line"
   "contract-link-unchecked|case_contract_link_unchecked|#613: the doctor with a followable committed symlink whose probe cannot conclude (reserve-paths.sh deleted, or printing an unknown output) -> WARN could not check, no FAIL, rc 0, no governance paths or autonomy reserve line"
-  "codex-doctor-contract-case|case_codex_doctor_contract_case|#617: --provider codex with the index holding only claude.md -> the contract file name FAIL, rc 1, no claim of skipped reserve or governance checks"
-  "codex-doctor-contract-symlink|case_codex_doctor_contract_symlink|#613: --provider codex with a committed CLAUDE.md symlink chain -> the contract file symlink FAIL, rc 1, no claim of skipped reserve or governance checks"
+  "codex-doctor-contract-case|case_codex_doctor_contract_case|#617: --provider codex with the index holding only claude.md -> the contract file name FAIL, rc 1, only the reserve check claimed skipped even with a reserve declared, no governance claim"
+  "codex-doctor-contract-symlink|case_codex_doctor_contract_symlink|#613: --provider codex with a committed CLAUDE.md symlink chain -> the contract file symlink FAIL, rc 1, only the reserve check claimed skipped even with a reserve declared, no governance claim"
   "codex-setup-fresh|case_codex_setup_fresh|#408: no AGENTS.md: rc 0, all five files wrote=, no AGENTS.md created, config.toml carries the CLAUDE.md fallback, and the three next: lines including codex --no-daemon"
   "codex-setup-idempotent|case_codex_setup_idempotent|#408: a second run gives only unchanged= lines and byte-identical files; --check afterward is rc 0 with no drift="
   "codex-setup-agents-roundtrip|case_codex_setup_agents_roundtrip|#408: each agent TOML's name/description/developer_instructions round-trips against agents/*.md, byte-identical body, no tools/model lines"
@@ -9229,6 +9316,9 @@ cases=(
   "codex-doctor-hooks-json-unparseable|case_codex_doctor_hooks_json_unparseable|#410 kickback: the plugin's own hooks.json replaced with invalid JSON -> the same FAIL as a missing file"
   "codex-doctor-hooks-key-sanitize|case_codex_doctor_hooks_key_sanitize|#410 kickback: an untrusted entry's key contains a space and a '\$' -> the printed line carries the '?'-substituted form, never the raw key"
   "codex-doctor-manual-merge|case_codex_doctor_manual_merge|#410: CLAUDE.md declares Merge autonomy policy and Autonomy mode -> PASS naming both as not applying on Codex; neither Claude-only verdict line prints"
+  "codex-doctor-reserve-malformed|case_codex_doctor_reserve_malformed|#627: --provider codex with an unreadable Autonomy reserve entry -> the malformed WARN, rc 0; a malformed Governance paths section draws no line"
+  "codex-doctor-reserve-declared|case_codex_doctor_reserve_declared|#627: --provider codex with a well-formed Autonomy reserve -> the PASS naming the glob count"
+  "codex-doctor-reserve-schema|case_codex_doctor_reserve_schema|#627: --provider codex schema advice only under a Plan auto-approval policy section; mode: autonomous alone prints no reserve line"
   "codex-doctor-protection-missing|case_codex_doctor_protection_missing|#410: the branch-protection endpoint call fails -> FAIL (hard floor on Codex, unlike Claude's WARN)"
   "codex-doctor-protection-unknown|case_codex_doctor_protection_unknown|#410: gh never authenticates, default branch unknown -> FAIL could not check, never a silent skip"
   "codex-doctor-protection-ruleset|case_codex_doctor_protection_ruleset|#418: classic call fails, a qualifying ruleset rule exists -> PASS (via rulesets), not a FAIL, rc 0"
