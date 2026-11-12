@@ -428,6 +428,9 @@ vocabulary and stdout grammar). Never re-derive the `route=`/`clear=`/`reason=` 
 paste them verbatim into the report; this skill never spells the clear command itself (the
 script's own read-only design is why — see `bin/harness-stop.sh`'s header).
 
+Every stop path below journals the stop once — `reason=stop-switch` for `stop=true`, `stop-unknown`
+otherwise — per `issue-implementer`'s "Run journal" bullet.
+
 **The stop path at the step-0, pre-implementation, pre-merge-pass and pre-ratchet checks:** each
 of these runs BETWEEN passes, so there is no stage currently in flight to finish — dispatch
 nothing new, run no further pass of any kind (no planning pass, no implementation pass, no merge

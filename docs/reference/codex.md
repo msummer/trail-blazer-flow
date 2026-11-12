@@ -1083,8 +1083,9 @@ journal is best effort, see `safety-model.md`'s "Run journal"). Never re-issue i
   failure paths, and the retry ladder's `sleep` fallback and step 2e's collapse skip keep their
   existing behaviour too.
 - **No issue in hand** (any other point: the preamble, step 0, discovery, step 2g, the ratchet
-  pass, or the end-of-run ledger and report): stop without posting anything, and release the lock
-  if it holds it. The final message carries a line of its
+  pass, or the end-of-run ledger and report): stop without posting anything. If it holds the lock,
+  journal `reason=permission-denied` (per `skills/issue-implementer/SKILL.md`'s "Run journal"
+  bullet), then release it. The final message carries a line of its
   own, exactly:
 
   ```
@@ -1103,7 +1104,11 @@ journal is best effort, see `safety-model.md`'s "Run journal"). Never re-issue i
 
 **Preflight stops (#496).** A STOP the run takes at its own preflight (the Codex preamble, the
 lock, or step 0, before the dispatch ledger is seeded) posts nothing, since no issue is in hand,
-and releases the lock if it holds it. The final message carries a line of its own, exactly:
+and releases the lock if it holds it. A stop taken after `acquire` succeeded journals
+`stage=run outcome=stopped` before that release — `reason=dirty-tree`, `red-baseline` or
+`stop-switch`, `stop-unknown` or `nothing-to-do` when one applies, `preflight` otherwise. The preamble's `codex-setup.sh --check` and
+an `acquire` exit 2 or 3 happen before any journal file exists, so they leave no record. The final
+message carries a line of its own, exactly:
 
 ```
 Unattended stop: preflight

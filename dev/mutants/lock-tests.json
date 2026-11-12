@@ -166,7 +166,8 @@
         "journal-release-force",
         "journal-session-id",
         "journal-stage-record",
-        "journal-worktree-shared"
+        "journal-worktree-shared",
+        "journal-run-stop-record"
       ]
     },
     {
@@ -280,6 +281,115 @@
       ],
       "expect_fail": [
         "journal-reclaim-links-prior"
+      ]
+    },
+    {
+      "name": "533-run-reason-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "*\" $f_reason \"*) ;;",
+          "to": "*) ;;"
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-rejects"
+      ]
+    },
+    {
+      "name": "533-run-reason-substring",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "case \" $RUN_STOP_REASONS \" in",
+          "to": "case \"$RUN_STOP_REASONS\" in"
+        },
+        {
+          "from": "*\" $f_reason \"*) ;;",
+          "to": "*\"$f_reason\"*) ;;"
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-rejects"
+      ]
+    },
+    {
+      "name": "533-run-outcome-unchecked",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": " || [ \"$f_outcome\" != \"stopped\" ]; then",
+          "to": "; then"
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-rejects"
+      ]
+    },
+    {
+      "name": "533-run-extra-keys-allowed",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "[ -n \"$f_issue$f_retries$f_deploy$f_harness$f_pr$f_branch\" ] || ",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-rejects"
+      ]
+    },
+    {
+      "name": "533-issue-optional-everywhere",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "|| [ -z \"$f_issue\" ] || [ -z \"$f_outcome\" ]; then",
+          "to": "|| [ -z \"$f_outcome\" ]; then"
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-rejects"
+      ]
+    },
+    {
+      "name": "533-run-reason-dropped",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "RUN_STOP_REASONS=\"red-baseline dirty-tree",
+          "to": "RUN_STOP_REASONS=\"dirty-tree"
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-record"
+      ]
+    },
+    {
+      "name": "533-run-keys-partial",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": "[ -n \"$f_issue$f_retries$f_deploy$f_harness$f_pr$f_branch\" ]",
+          "to": "[ -n \"$f_issue$f_pr\" ]"
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-rejects"
       ]
     }
   ]

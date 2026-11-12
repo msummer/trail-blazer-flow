@@ -1206,12 +1206,22 @@ run did, so the record outlives the session. `acquire` creates `<git-common-dir>
 one `acquire` record, and `release` / `release --force` append `release` / `release-force`. The
 orchestrating skills add `stage` records through `harness-lock.sh journal <run-id> stage=<s>
 issue=<n> outcome=<o> [retries=<k>] [deploy=<d>] [harness=<v>] [pr=<n>] [branch=<b>] [reason=<r>]`:
-one per recorded `<!-- harness-status: … -->` line (merge lines included) plus three exit records
-from `issue-implementer`'s "Run journal" bullet — `pr-opened`, `impl-blocked` and `escalated`.
+one per recorded `<!-- harness-status: … -->` line (merge lines included) plus four exit records
+from `issue-implementer`'s "Run journal" bullet — `pr-opened`, `impl-blocked`, `escalated` and
+`skipped` (`reason=foreign-worktree`, a stale worktree that is not ours holding a branch the batch
+needs; the run continues). A run that stops early adds one run-level record,
+`harness-lock.sh journal <run-id> stage=run outcome=stopped reason=<r>` (#533), with no `issue`
+key and no other optional key; `<r>` is one of the closed vocabulary `RUN_STOP_REASONS` (`--help`
+lists it): `red-baseline`, `dirty-tree`, `stop-switch` (the stop switch read `stop=true`),
+`stop-unknown` (`stop=unknown` or an undocumented exit status), `nothing-to-do` (a standalone
+implementer run with an empty ready list), and the Codex-only `preflight` (any other preflight
+stop after `acquire`) and `permission-denied` (a stop with no issue in hand). Any other value exits
+2 and writes nothing.
 Each line is one JSON object, `"v":1`, with keys in a fixed order: `ts`, `run_id`, `event`
 (`acquire`, `release`, `release-force`, `stage`), `session`, then the event's own keys (`host`,
 `pid`, `harness_version` and, after a stale reclaim, `reclaimed_run_id` on `acquire`; the
-`stage`/`issue`/`outcome` keys and the optional ones above on `stage`). `session` is
+`stage`/`issue`/`outcome` keys and the optional ones above on `stage`; a `stage=run` record has
+no `issue`). `session` is
 `CLAUDE_CODE_SESSION_ID` when it is wholly `[A-Za-z0-9-]{1,64}` and `""` otherwise — always `""`
 on Codex, where that variable is not exported; the `acquire` record's `pid` and `host` identify
 the session there. Every value is held to an explicit character set and length cap and the run id
@@ -1226,10 +1236,12 @@ at a time and never recursively. Codex's `trail-blazer/runs/<stamp>-<pid>/record
 whole-run outcome; the journal holds the per-stage records, and the two join on the run id (the
 first line of that run's `last-message.md`). Read it with, for example, `jq -cR 'fromjson? |
 select(.pr == 530 or .issue == 251)' "$(git rev-parse --git-common-dir)"/trail-blazer/journal/run-*.jsonl`
-(`fromjson?` skips a truncated line); `select(.event != "stage")` reads the lock tenure.
+(`fromjson?` skips a truncated line); `select(.event != "stage")` reads the lock tenure and `select(.stage == "run")` reads why runs
+stopped early.
 **Honest limits:** the journal is advisory and not tamper-evident — anything with write access to
 `.git` can edit it, and the model holds the grant to append a false `stage` record; a missing
 record does not prove nothing happened; stage-record placement is prompt-enforced like
 acquire/release placement; append atomicity assumes a local filesystem, and a window between the
-symlink check and the append remains; a refused `acquire` (exit 3) leaves no record, and a run that
-stops before dispatching anything (red baseline, stop switch) journals only its lock events.
+symlink check and the append remains; a refused `acquire` (exit 3) and a Codex preamble stop leave no record
+(no journal file exists yet); run-stop records are written by the skills' prompts, so nothing in
+the script enforces that a stopping run writes one, or only one.
