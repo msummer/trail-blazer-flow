@@ -23,6 +23,7 @@
 │   ├── issue-planner/SKILL.md    # orchestrates planning (answers → revision → policy auto-approval)
 │   ├── issue-implementer/SKILL.md # orchestrates implementation → verification → PR (+ CI fix)
 │   ├── issue-implementer/references/worktree-mode.md  # worktree-parallel procedure (read on demand)
+│   ├── issue-implementer/references/wording-fast-path.md  # verifier wording-only fix round (read on demand)
 │   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
 │   └── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
 ├── bin/                          # on the Bash PATH when the plugin is enabled, on Claude Code — never on Codex (#408, ADR 0002 P5)

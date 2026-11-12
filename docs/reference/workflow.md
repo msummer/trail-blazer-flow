@@ -156,7 +156,8 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    `skills/issue-implementer/SKILL.md`'s "Durable escalation" subsection) and move on to the
    next issue.
    Before reporting, the subagent runs a mandatory evidence pass — sweeping the repo for every
-   claim its diff falsifies, mutation-checking each new or rewritten test, probing each behaviour
+   claim its diff falsifies (and checking each comment, doc or changelog line it writes),
+   mutation-checking each new or rewritten test, probing each behaviour
    the plan names with a production-code mutation that a test must kill, pasting every number
    from command output — and records it in its report's Evidence block.
 3. On completion: **independently re-runs the verification commands** (the mechanical gate — the
@@ -178,7 +179,10 @@ The `issue-implementer` skill, for each `plan-approved` issue (sequential by def
    value (item 9) when that section declares `mode: autonomous` — is never exceeded**, then
    `impl-blocked` with the findings; **the orchestrator itself never patches a
    finding** — it never edits a source, test, or doc file to resolve one, only re-dispatches the
-   implementer or, once the budget is spent, takes the blocked path. All of this happens
+   implementer or, once the budget is spent, takes the blocked path. When the verifier tags every
+   finding `wording` (text-only, with exact replacement text), one budget-free fast-path round
+   re-dispatches the implementer once per issue per run and is re-verified like any kickback
+   (`skills/issue-implementer/references/wording-fast-path.md`). All of this happens
    *before* anything is pushed or a PR exists — the branch may already carry local WIP checkpoint
    commits by this point (see "Resilience: checkpointing, retries, and the dispatch ledger"
    below), but nothing leaves the machine until the verifier passes, so every PR the human sees is

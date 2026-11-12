@@ -340,7 +340,8 @@ edit that only a human can make.
   a PR is only held because it's behind, the train updates the branch once, waits for CI, and
   re-checks the whole floor.
 - **The retry budget is configurable.** `kickback-budget:` (0–3, default 2) sets how many times a
-  failed verifier review goes back to the implementer before the issue is marked `impl-blocked`.
+  failed verifier review goes back to the implementer before the issue is marked `impl-blocked`. A
+  review whose every finding is wording-only gets one extra fix round that doesn't count.
 
 ### What it never does
 

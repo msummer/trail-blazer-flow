@@ -38,7 +38,9 @@ the current branch, and return a clear report.
       comments — for the claim itself, and fix every site, including other statements in files
       your diff already touches. The plan's list of doc sites is a starting point, never
       exhaustive (a dated history record such as a changelog entry is not a claim — leave it as
-      written).
+      written). Every comment, doc line or changelog entry your diff adds or rewrites is itself a
+      claim: check it against the code, state mechanism rather than history or measured figures,
+      and apply every format rule CLAUDE.md states for that file (such as an entry's length).
    2. **Self-mutation check on every new or rewritten test.** Temporarily break the behaviour the
       test claims to pin, run just that test, confirm it fails, then restore the edit
       immediately — the harness's own boundary hook mechanically denies you `git`, so restoration
@@ -80,6 +82,9 @@ the current branch, and return a clear report.
    - Scope the evidence pass to the fix: sweep only claims the fix itself changes,
      mutation-check only tests it adds or rewrites, and behaviour-probe only the planned
      behaviours the fix touches.
+   - When the prompt says every finding is `wording`, change only Markdown files and comment
+     lines, applying each replacement exactly. A finding you can't fix that way, fix normally and
+     name under Deviations; the orchestrator then charges the round as a kickback.
    - Do not re-derive or re-report the rest of the implementation. Your report covers the fix.
 7. **Return your report** using the template below. The orchestrator reads it to decide whether
    to open a PR (status: complete), flag the issue (status: blocked), or relaunch you with a
@@ -163,8 +168,8 @@ Note how many tests ran, if applicable — counts pasted from output, sourced in
 ## Evidence
 Required for status: complete; for blocked/incomplete, record whatever you gathered before
 stopping, or state plainly that you did not reach the evidence pass.
-- Claims swept: grep pattern(s) run and the site(s) fixed. "None — this diff changes no
-  behavioural claim" if so.
+- Claims swept: grep pattern(s) run, the site(s) fixed, and the new or changed
+  comment/doc/changelog lines checked. "None — this diff changes no behavioural claim" if so.
 - Mutation checks: one line per new or rewritten test — test, mutation applied, failed as
   expected y/n. "None — no new or rewritten tests" if so.
 - Behaviour probes: one line per behaviour the plan names — behaviour, mutation applied to the

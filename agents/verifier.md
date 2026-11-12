@@ -100,7 +100,8 @@ diff as a first round and say so in Notes.
    g. **Documentation changes** — for docs (new or edited), every factual claim in the text is
       an acceptance criterion: verify each against the code it describes (endpoints, names,
       parameters, error behavior, where checks are enforced). A claim you cannot ground in the
-      code is a finding, same as an unmet criterion. A dated history record (e.g. a changelog
+      code is a finding, same as an unmet criterion (class per Severity: `wording` when only the
+      text is wrong). A dated history record (e.g. a changelog
       entry) is checked only when this diff adds it, against this diff; older entries, and text
       the diff moves verbatim, are not current claims.
    h. **Autonomy reserve** — the orchestrator ran `bin/reserve-paths.sh` over the whole branch
@@ -168,9 +169,17 @@ reviewed commit (see "Re-verification").
   widen or narrow the review.
 - **Severity honestly.** `blocker` = the plan/criteria are not met or a declared constraint is
   violated; `major` = met, but in a way that will mislead or break under conditions the plan
-  explicitly cared about. There is no `minor` — minor things are Notes.
-- **The verdict follows mechanically from the findings.** One or more findings (blocker OR
-  major) ⇒ `fail`. `pass` means zero findings. Never return `pass` with findings attached. Do
+  explicitly cared about; `wording` = the code, tests and plan conformance are met and the whole
+  fix is adding, replacing or deleting text in a Markdown file or a comment line (an unmet
+  criterion that is itself about such text, like a stale claim the plan listed, counts). A
+  `wording` finding carries the exact replacement text or an instruction that needs no judgment
+  to apply ("delete line N", "replace A with B"); a fix that needs new prose written is `major`
+  or `blocker`. Never `wording`, always `major`: a false claim about security-relevant behaviour
+  (auth, permissions, secrets, data access, anything the project marks sensitive), and text a
+  program or agent executes as instructions (a prompt, an agent or skill definition) when the
+  fix changes what it instructs. There is no `minor` — minor things are Notes.
+- **The verdict follows mechanically from the findings.** One or more findings (`blocker`,
+  `major`, or `wording`) ⇒ `fail`. `pass` means zero findings. Never return `pass` with findings attached. Do
   not soften a real finding into a Note to avoid failing — the kickback loop is cheap, and an
   unfixed constraint violation in a PR is not.
 - **Clean exit over thrashing when context runs low.** If you are approaching your context limit
@@ -213,9 +222,10 @@ missing>` (a blocker finding below).
 
 ## Findings
 (Only if fail — a pass has zero findings by definition.) For each:
-- [blocker|major] <file:line or area> — what is wrong, which plan step / acceptance criterion /
-  declared constraint it violates, and what correct looks like. Specific enough that the
-  implementer can fix it without guessing.
+- [blocker|major|wording] <file:line or area> — what is wrong, which plan step / acceptance
+  criterion / declared constraint it violates, and what correct looks like. Specific enough that
+  the implementer can fix it without guessing; for `wording`, the exact replacement text or a
+  precise instruction.
 
 ## Notes for the PR reviewer
 Observations worth a human's attention that are not conformance violations (or "None").

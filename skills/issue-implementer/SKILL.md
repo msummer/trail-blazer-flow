@@ -92,9 +92,9 @@ a special case; only repeated identical deaths through attempt 5 become the esca
 **Not retryable — different paths:** a well-formed `status: blocked` report (the blocked path,
 step 2f) or a verifier `fail` verdict (the kickback loop, step 2e, its own budget). The
 ladder never composes with the kickback loop into more than budget + 1 implementer attempts per
-verification round, plus the ladder's own retries within each attempt. State the attempt number
-in every dispatch prompt ("Dispatch attempt: `<k>`", starting at 1) so the subagent's echoed
-status line carries the right `retries` value.
+verification round (plus one wording fast-path round, step 2e), plus the ladder's own retries
+within each attempt. State the attempt number in every dispatch prompt ("Dispatch attempt:
+`<k>`", starting at 1) so the subagent's echoed status line carries the right `retries` value.
 
 ### Status line
 
@@ -595,10 +595,12 @@ e. **Dispatch the `verifier` subagent** (Claude Code: Task tool; Codex: `spawn_a
      `Previously reviewed commit: <sha>` (the failing round's recorded commit). This makes the
      round a re-verification under the verifier's own "Re-verification" rules: it confirms each
      prior finding is resolved and checks only the kickback's delta, so a new survivor on code
-     the prior round already accepted cannot restart the loop. **The kickback budget — 2 by
+     the prior round already accepted cannot restart the loop. **Wording fast path:** when every
+     finding is `wording`, run `references/wording-fast-path.md`'s one budget-free round instead
+     (once per issue per run). **The kickback budget — 2 by
      default, or CLAUDE.md's "Autonomy mode" `kickback-budget:` value (README contract item 9)
      when that section declares `mode: autonomous`, bounded 0-3 — is never exceeded** (budget + 1
-     implementer attempts total). Still failing → blocked path (step f), with the
+     implementer attempts total, plus at most one wording fast-path round). Still failing → blocked path (step f), with the
      latest findings as the blocker explanation. Record verification rounds and ladder retries
      used for the summary table.
 
@@ -836,7 +838,7 @@ When you acquired the lock yourself at step 0 (standalone run), the report's **f
 line when `issue-cycle` acquired it instead (composed run) — its own report carries the line.
 
 Report a table: issue number, title, outcome (PR opened → link / blocked → branch name),
-verification rounds (1 = clean; 2+ = kickbacks — say what the verifier caught), retries (ladder
+verification rounds (1 = clean; 2+ = kickbacks or the wording fast path — say what the verifier caught), retries (ladder
 retries per stage, resume relaunches out of the cap of 2), CI status (pass / fixed after 1
 attempt / fail / no checks), and any issues skipped and why — a stage with no recorded outcome is
 a gap to report, never a silent skip (a `plan: null`, a missing `plan_selection` entry, or
