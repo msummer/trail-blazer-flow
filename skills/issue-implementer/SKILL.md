@@ -914,7 +914,8 @@ read-only in the sandbox (ADR 0002 P5) — always sequential; see the Codex poin
 When 2+ ready issues have approved plans with pairwise disjoint "Affected areas" (production AND
 test files, including shared fixtures like a `conftest`), you may implement them in parallel via
 git worktrees instead of sequentially, up to **4 implementer dispatches in flight**. Any overlap,
-doubt, or plan missing an Affected areas section → sequential.
+doubt, or plan missing an Affected areas section → sequential (a full-auto wave ignores one
+declared changelog file: `issue-cycle`'s `references/full-auto.md`).
 
 Before entering the mode, **Read `references/worktree-mode.md`** (it sits next to this SKILL.md)
 and follow it; do not attempt the mode from memory — it holds the supervisor loop, the swarm

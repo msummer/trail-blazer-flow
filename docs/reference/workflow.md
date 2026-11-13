@@ -398,11 +398,14 @@ this section is its prose summary.
   empty result or exactly 100 results stops the run. The list is frozen: follow-ups filed during
   the run are out. Out-of-scope issues get no dispatch, label or comment.
 - **Waves.** Up to 4 in-scope issues with pairwise-disjoint Affected areas form a wave, built in
-  worktree-parallel mode (a single-issue wave is sequential). The wave's PRs are then evaluated
-  and merged one at a time through `merge-floor.sh`, with the serial train's update-branch
-  fallback, before the next wave is cut, so overlapping issues land in later waves from a tip
-  that already holds the earlier merge. An issue overlapping an in-scope issue's still-open PR is
-  not dispatched this run. Where every plan names a shared file, every wave holds one issue.
+  worktree-parallel mode (a single-issue wave is sequential). The one changelog file a repo
+  declares in its "Append-only changelog" section (`bin/changelog-merge.sh --declared`) is left
+  out of that comparison. The wave's PRs are then evaluated and merged one at a time through
+  `merge-floor.sh`, with the serial train's update-branch fallback (and its changelog route for
+  that declared section), before the next wave is cut, so overlapping issues land in later waves
+  from a tip that already holds the earlier merge. An issue overlapping an in-scope issue's
+  still-open PR is not dispatched this run. Where every plan names a shared file other than the
+  declared changelog, every wave holds one issue.
 - **Budgets and stops.** One kickback (two verifier rounds), or a lower declared
   `kickback-budget:`; the wording fast path stays outside the budget. A failure after round 2
   blocks that issue and the run continues. The stop switch is checked at the same points as the

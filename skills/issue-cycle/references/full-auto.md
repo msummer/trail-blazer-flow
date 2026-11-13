@@ -82,16 +82,20 @@ fallback as written, with these differences.
 
 - **(a) Drain.** Phase A drains only PRs whose `claude/<n>-…` head branch has `<n>` in scope.
 - **(b) Waves.** Phase B runs the implementer's step 1 once and keeps only in-scope ready issues,
-  in that order. It forms waves greedily: an issue joins the current wave only if its plan's
-  Affected areas are disjoint from every issue already in it, by the worktree-parallel
-  eligibility test in `issue-implementer`'s SKILL.md. Any doubt, or a missing Affected areas
+  in that order. Before the first wave, run `changelog-merge.sh --declared` once from the main
+  checkout. On `changelog=declared`, the one repo-relative path on its `file=` line is ignored
+  when comparing Affected areas (any other spelling of it, a glob or a directory, still counts);
+  any other result exempts nothing, and the report says `changelog: <its first line>`. It forms
+  waves greedily: an issue joins the current wave only if its plan's Affected areas are
+  disjoint from every issue already in it, by the worktree-parallel eligibility test in
+  `issue-implementer`'s SKILL.md, less that exemption. Any doubt, or a missing Affected areas
   section, makes a wave of one. A wave holds at most 4 issues; hand the implementer exactly the
   wave's issues. A wave of 2 or more uses worktree-parallel mode; a wave of 1 is sequential.
   When all the wave's lanes are terminal, each of its PRs gets step 3's per-PR evaluation, one at
   a time, plus Phase B's post-merge rules; then the next wave starts.
 - **(c) Behind an open PR.** At each wave's start, an issue whose Affected areas overlap those of
-  an in-scope issue with an open, unmerged PR is not dispatched this run; report "waits behind
-  PR #<x>".
+  an in-scope issue with an open, unmerged PR — less rule (b)'s declared changelog file — is not
+  dispatched this run; report "waits behind PR #<x>".
 - **(d) Once.** Each in-scope issue is dispatched in at most one wave per run.
 - **(e) Stops.** A train-stopping event starts no further wave. A merge-halting event follows the
   Queue policy: later waves still run, and rule (c) applies.
@@ -99,9 +103,10 @@ fallback as written, with these differences.
   "Autonomy mode". The wording fast path, where `issue-implementer` defines it, is outside the
   budget. A failure after round 2 takes the implementer's blocked path and the run continues
   with the other issues.
-- **(g) No local merge.** No local merge or rebase into a lane, and no re-verification after an
-  update-branch: the fallback's CI wait, its full floor re-run and the post-merge baseline
-  refresh are the checks, exactly as in the serial train.
+- **(g) No local merge.** No local merge or rebase into a lane, except `serial-train.md`'s
+  changelog route (a script-built merge-from-base commit, pushed without force), and no
+  re-verification after an update-branch: the fallback's CI wait, its full floor re-run and the
+  post-merge baseline refresh are the checks, exactly as in the serial train.
 - **Merge journal.** Each merge's existing journal call adds `reason=full-auto`.
 
 When step 3's merge pass is not active for this run, every merge step is skipped and rules
@@ -119,8 +124,8 @@ every new launch, and `merge-floor.sh`'s own per-PR check.
 ## Report
 
 Step 5's report adds: the scope as typed and as resolved; the grant in effect; each wave (its
-issues, parallel or sequential); each update-branch pair; and the issues not dispatched, with
-why. `stage-skipped` lines from `reconcile-ledger.sh` for out-of-scope issues are reported as
+issues, parallel or sequential); the `--declared` result; each update-branch pair, a
+changelog-route pair marked as such; and the issues not dispatched, with why. `stage-skipped` lines from `reconcile-ledger.sh` for out-of-scope issues are reported as
 "outside the full-auto scope", not escalated; the same lines for in-scope issues escalate as
 usual.
 
@@ -134,7 +139,10 @@ budget, and one report line saying so.
 - Detecting an unattended run is prompt-enforced; nothing mechanical tells a `/loop` iteration
   apart.
 - The overlap loosening means in-scope plans all auto-approve, but where every plan names a
-  shared file (a changelog, say) every wave holds one issue.
+  shared file other than a declared changelog every wave holds one issue; without an "Append-only
+  changelog" section, a shared changelog is such a file. The changelog route settles only a
+  single contiguous insertion at the top or bottom of the declared section; anything else holds
+  the PR for the human.
 - A later-wave issue's plan was written before the earlier merges (the implementer's drift
   caveat applies).
 - Overlap with an out-of-scope open PR is not checked.

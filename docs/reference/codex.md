@@ -108,7 +108,7 @@ rule, and otherwise leaves it to the sandbox. `templates/codex.rules` has three 
   main`, `git push origin main`, and `codex-scheduled-run.sh` — a scheduled Codex run is launched
   by launchd, never from inside a session (see "Scheduling unattended runs (macOS)" below).
 - **Gated** — the harness scripts that call `gh` (directly, or through `harness-status.sh`)
-  or write inside `.git` (`check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
+  or write inside `.git` (`changelog-merge.sh`, `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
   `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`, `tracker-sync.sh`) each get an `allow` rule on their
   bare name **plus** a `host_executable` pin to this install's own absolute `bin/` path. The pin
@@ -819,7 +819,7 @@ program name, and running a script through `bash` makes `bash` the program, not 
 Report the resolved root once, in the run summary.
 
 - **Gated** (run outside the sandbox only through the installed rules — see "Rules" above):
-  `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
+  `changelog-merge.sh`, `check-decision-record.sh`, `check-harness.sh`, `cleanup-after-merge.sh`,
   `find-implementation-work.sh`, `find-planning-work.sh`, `harness-lock.sh`, `harness-status.sh`,
   `harness-stop.sh`, `merge-floor.sh`, `reconcile-ledger.sh`, `setup-labels.sh`, `tracker-sync.sh`.
 - **Ungated** (run sandboxed): `harness-version.sh`, `governance-paths.sh`, `reserve-paths.sh`,

@@ -20,7 +20,10 @@ verifier's verdict is archived on the *issue* instead (`Bash(gh issue comment:*)
 granted), which is also where the merge pass reads it back with one `gh issue view` call.
 `Bash(gh pr update-branch:*)` is used only by the serial merge train's update-branch fallback
 (item 9; a full-auto run reuses it) — it merges the default branch into a held PR's own branch, never `--rebase`, and never
-touches the default branch itself. The same
+touches the default branch itself. `Bash(changelog-merge.sh:*)` is used by a full-auto run's wave planning
+(`changelog-merge.sh --declared`, read-only) and by that fallback's changelog route (item 12): the
+script builds the merge-from-base commit, and the orchestrator pushes it with the existing
+`Bash(git push:*)` grant, never forced. The same
 file also carries the non-permission keys a clone needs to bootstrap
 the plugin — `extraKnownMarketplaces` (auto-registering + auto-updating the marketplace) and
 `enabledPlugins` — covered in the README's [Getting started](../../README.md#getting-started). Four grants exist solely for the

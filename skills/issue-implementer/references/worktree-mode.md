@@ -139,7 +139,9 @@ c. **Dispatch the implementers as one batch** (up to the concurrency bound; they
    Git Bash, where backslash paths get mangled by quoting. Also name the sibling issues'
    affected files as explicitly out of scope ("issues <n>, <m> are being implemented
    concurrently — do NOT touch <their files>") so a subagent that discovers adjacent work
-   doesn't drift into a concurrent issue's territory. Before that issue's step b the round's
+   doesn't drift into a concurrent issue's territory. Leave out of that list the one changelog
+   file a full-auto run exempted from its overlap test (`issue-cycle`'s `references/full-auto.md`):
+   each lane adds its own bullet there, and the changelog route settles the merge. Before that issue's step b the round's
    stop check has run (Supervisor loop above); immediately before each issue's first
    dispatch in the batch (never a relaunch or kickback), `gh issue edit <number> --add-label
    building` — best effort, per the skill's "Labels involved".

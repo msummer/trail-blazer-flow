@@ -456,7 +456,8 @@ To push one milestone or a short list of issues through without turning on stand
   under the same hard floor. Plans that overlap each other, but none outside the scope, can still
   be approved; the run then sequences them instead.
 - **Issues build in parallel worktrees** when their plans touch different files; ones that
-  overlap go in later waves, each cut after the earlier PRs have merged.
+  overlap go in later waves, each cut after the earlier PRs have merged. A changelog declared
+  in an `Append-only changelog` section (item 12) does not count as overlap.
 - **PRs merge** one at a time when CI is green, under the merge floor, with at most two verifier
   rounds per issue. This needs the `gh pr merge` deny lifted, as for any merging; without that,
   the run ends with PRs awaiting you.
@@ -489,6 +490,7 @@ item, including every hard floor, are in
 | 9 | `Autonomy mode` | Optional | `mode: autonomous` turns items 4 and 5 on together (see [Autonomous mode](#autonomous-mode)) |
 | 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
 | 11 | `Tracker` | Optional | The URL of the repo's live tracker page, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
+| 12 | `Append-only changelog` | Optional | The changelog file and section that only ever grows, so a full-auto run can build issues that share it in parallel and settle its merge conflict mechanically ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 
 Example policy sections:
 
