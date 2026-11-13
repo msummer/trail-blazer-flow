@@ -121,7 +121,8 @@ merges.
    happy, then say *"Looks good — go ahead."*
 3. **Let it set things up.** It creates or selects the GitHub repo, installs the labels, and
    writes `.claude/settings.json`, `docs/PROJECT-BRIEF.md`, a drafted `CLAUDE.md`, and the
-   issues. Issue #1 is the walking skeleton. Kickoff never commits on its own, so review the files
+   issues, recording which issue blocks which as GitHub issue dependencies. Issue #1 is the
+   walking skeleton. Kickoff never commits on its own, so review the files
    and then say:
    > "Commit and push the setup files."
 4. **Build the skeleton (issue #1).**
@@ -457,7 +458,10 @@ To push one milestone or a short list of issues through without turning on stand
   be approved; the run then sequences them instead.
 - **Issues build in parallel worktrees** when their plans touch different files; ones that
   overlap go in later waves, each cut after the earlier PRs have merged. A changelog declared
-  in an `Append-only changelog` section (item 12) does not count as overlap.
+  in an `Append-only changelog` section does not count as overlap: if every change adds a
+  changelog entry, add that section to your `CLAUDE.md`, naming the file and the heading new
+  entries go under (example in [claude-md-contract.md](docs/reference/claude-md-contract.md),
+  item 12), or every wave holds one issue.
 - **PRs merge** one at a time when CI is green, under the merge floor, with at most two verifier
   rounds per issue. This needs the `gh pr merge` deny lifted, as for any merging; without that,
   the run ends with PRs awaiting you.
@@ -614,6 +618,10 @@ To update by hand:
 /plugin marketplace update trail-blazer-flow
 /plugin update trail-blazer-flow@trail-blazer-flow
 ```
+
+**What's new.** Each release's highlights, with links to how to use them, are in its
+[GitHub release notes](https://github.com/msummer/trail-blazer-flow/releases); `CHANGELOG.md`
+has the per-PR detail. The migration notes below list only what your repo must change.
 
 **`autoUpdate` is a trust choice.** It means taking the latest release without reviewing it
 first. If you'd rather check updates yourself, set `"autoUpdate": false` in
