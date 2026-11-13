@@ -633,7 +633,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.5.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.6.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -743,6 +743,10 @@ is a symlink, the doctor FAILs a committed link the one-hop read cannot follow, 
 link and the reason; point it straight at a file in the repo and commit. If `check-harness.sh`
 FAILs `contract file: git tracks it as '<name>'`, run the `git mv <name> CLAUDE.md` it names and
 commit.
+
+**v3.5.0 → v3.6.0** — re-copy the permissions block from `templates/repo-settings.json` or add
+`"Bash(tracker-sync.sh:*)"` and `"Bash(changelog-merge.sh:*)"` by hand. On Codex, also re-run
+`bin/codex-setup.sh`.
 
 </details>
 

@@ -16,7 +16,26 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.6.0
+
+This minor release adds "full auto" to `issue-cycle`: one human-invoked run plans, builds in
+parallel worktrees and merges a named milestone or issue list under the existing floors (#623).
+Issues that share only a changelog run in parallel once the repo declares it in an "Append-only
+changelog" section; the update-branch fallback rebuilds that section with `bin/changelog-merge.sh`
+and holds on anything else (#631). An opt-in live tracker shows a repo's issues on a claude.ai page
+(#622, #637), and `project-kickoff` records the backlog's dependencies so the tracker shows them
+(#630).
+
+The agents change too:
+- the verifier gains a `wording` finding class, with one budget-free fix round (#619);
+- the implementer and verifier never leave a background wait loop running (#638);
+- agent-boundary lets them run a fixed table of local deploy-CLI commands (#605).
+
+The doctor checks more: the Codex doctor validates the Autonomy reserve (#627), and a committed
+`CLAUDE.md` symlink the one-hop read rejects is a FAIL (#613, #617). The run journal records why a
+run stopped early (#533), and worktree-parallel mode runs the stop check before each new issue
+(#530). Consumer steps (README v3.5.0 → v3.6.0): add the `tracker-sync.sh` and
+`changelog-merge.sh` grants, and on Codex re-run `bin/codex-setup.sh`.
 
 - #631: full auto: lanes sharing only a declared append-only changelog run in parallel; the
   update-branch fallback rebuilds that section (`bin/changelog-merge.sh`). Consumer step: re-copy
