@@ -45,8 +45,8 @@ in this session` and stop. Nothing here ever blocks, fails or reorders a cycle.
 3. `ArtifactData` `batch` with one entry `{op: set, collection: harness, doc_id: state,
    file_path: <the printed file=>, if_version: <version>}`. On a version conflict re-get as
    in step 2 and re-send once; any other error prints `tracker: skipped — <error>` and stops.
-4. Report `tracker: synced <issues> issues, <milestones> milestones at <checked=> — <url>`, then
-   People read-back.
+4. Report `tracker: synced <issues> issues, <milestones> milestones at <checked=> — <url>` and each
+   `warn=` line as `tracker: <line>`, then People read-back.
 
 ## People read-back
 

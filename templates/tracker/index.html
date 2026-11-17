@@ -69,6 +69,8 @@ a { color: var(--accent); }
 .card { background: var(--card); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; margin: 8px 0; }
 .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-top: 1px solid var(--line); }
 .row:first-child { border-top: 0; }
+table.fsec { border-collapse: collapse; width: 100%; }
+table.fsec th, table.fsec td { text-align: left; vertical-align: top; padding: 4px 6px; border-top: 1px solid var(--line); }
 .row .title { flex: 1 1 14rem; min-width: 0; }
 .mx-wrap { overflow-x: auto; }
 .mx { border-collapse: collapse; overflow-wrap: normal; }
@@ -405,6 +407,55 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     return box;
   }
 
+  // A section the sync projected from a repo file (snapshot sections[]): a table or a list; every
+  // value is text, and an issue link's href is the issue's own GitHub url, never file content.
+  function fileSectionBlock(s, byNum, repoUrl) {
+    var box = el("div");
+    box.appendChild(el("h2", null, String(s.title || s.id || "")));
+    function issueCell(parent, nums) {
+      (nums || []).forEach(function (n) {
+        var issue = byNum[n];
+        parent.appendChild(link("#" + n, issue ? issue.url : (repoUrl ? repoUrl + "/issues/" + n : "")));
+        if (issue) { parent.appendChild(badge(String(issue.state))); }
+      });
+    }
+    var c = el("div", "card");
+    c.style.overflowX = "auto";
+    if (s.kind === "table") {
+      var rows = s.rows || [];
+      var any = rows.some(function (r) { return (r.issues || []).length > 0; });
+      var t = el("table", "fsec");
+      var hr = el("tr");
+      (s.columns || []).forEach(function (col) { hr.appendChild(el("th", null, col)); });
+      if (any) { hr.appendChild(el("th", null, "")); }
+      t.appendChild(el("thead")).appendChild(hr);
+      var tb = el("tbody");
+      rows.forEach(function (r) {
+        var tr = el("tr");
+        (r.cells || []).forEach(function (cell) { tr.appendChild(el("td", null, cell)); });
+        if (any) {
+          var td = el("td");
+          issueCell(td, r.issues);
+          tr.appendChild(td);
+        }
+        tb.appendChild(tr);
+      });
+      t.appendChild(tb);
+      c.appendChild(t);
+    } else if (s.kind === "list") {
+      (s.rows || []).forEach(function (r) {
+        var row = el("div", "row");
+        row.appendChild(el("div", "title", r.text || ""));
+        issueCell(row, r.issues);
+        c.appendChild(row);
+      });
+    }
+    if (s.kind === "table" || s.kind === "list") { box.appendChild(c); }
+    if (s.truncated) { box.appendChild(el("p", "muted", "(truncated)")); }
+    if (s.source) { box.appendChild(el("p", "muted", "source: " + s.source)); }
+    return box;
+  }
+
   function milestoneBlock(m, issues, repoUrl, byNum) {
     var box = el("div");
     var h = el("h2");
@@ -440,8 +491,10 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     var issues = h.issues || [];
     var byNum = {};
     issues.forEach(function (i) { byNum[i.number] = i; });
+    (h.refs || []).forEach(function (i) { if (!byNum[i.number]) { byNum[i.number] = i; } });
     model.sections.slice().sort(function (a, b) { return num(a.data.order) - num(b.data.order); })
       .forEach(function (s) { app.appendChild(sectionBlock(s, byNum, h.repoUrl)); });
+    (h.sections || []).forEach(function (s) { app.appendChild(fileSectionBlock(s, byNum, h.repoUrl)); });
     var known = {};
     (h.milestones || []).forEach(function (m) {
       known[m.number] = true;

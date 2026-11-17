@@ -1232,14 +1232,18 @@
         }
       ],
       "expect_fail": [
-        "tracker-query-failed-repo",
-        "tracker-query-failed-milestones",
-        "tracker-query-failed-issues-open",
-        "tracker-query-failed-issues-closed",
-        "tracker-query-failed-prs",
+        "tracker-health-ci",
         "tracker-query-failed-branch",
         "tracker-query-failed-ci",
-        "tracker-health-ci",
+        "tracker-query-failed-issues-closed",
+        "tracker-query-failed-issues-open",
+        "tracker-query-failed-issues-refs",
+        "tracker-query-failed-milestones",
+        "tracker-query-failed-prs",
+        "tracker-query-failed-repo",
+        "tracker-query-failed-section",
+        "tracker-query-failed-tree",
+        "tracker-section-bad-blob",
         "tracker-too-large"
       ]
     },
@@ -1382,6 +1386,146 @@
       ],
       "expect_fail": [
         "tracker-health-baseline"
+      ]
+    },
+    {
+      "name": "646-path-dotdot",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      *//*|*/./*|*/../*) return 1 ;;\n",
+          "to": "      *//*|*/./*) return 1 ;;\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-malformed-bad-section"
+      ]
+    },
+    {
+      "name": "646-reason-order",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "  if [ \"$urls\" -gt 1 ]; then tracker_reason=\"multiple-urls\"; return 0; fi\n",
+          "to": "  if [ \"$urls\" -gt 1 ]; then tracker_reason=\"multiple-urls\"; return 0; fi\n  if ! parse_section_values; then tracker_reason=\"bad-section\"; return 0; fi\n"
+        },
+        {
+          "from": "  if ! parse_section_values; then tracker_reason=\"bad-section\"; return 0; fi\n  tracker_state=\"present\"",
+          "to": "  tracker_state=\"present\""
+        }
+      ],
+      "expect_fail": [
+        "tracker-malformed-bad-section"
+      ]
+    },
+    {
+      "name": "646-missing-fails-sync",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      warn_tok=\"section-missing\"\n",
+          "to": "      skip \"build-failed\"\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-section-warn"
+      ]
+    },
+    {
+      "name": "646-section-fail-open",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "$esha\" </dev/null 2>/dev/null)\"; then q_fail section; fi",
+          "to": "$esha\" </dev/null 2>/dev/null)\"; then out='{\"encoding\":\"base64\",\"content\":\"\"}'; fi"
+        }
+      ],
+      "expect_fail": [
+        "tracker-query-failed-section"
+      ]
+    },
+    {
+      "name": "646-mode-check",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "    if [ \"$etype\" != \"blob\" ] || { [ \"$emode\" != \"100644\" ] && [ \"$emode\" != \"100755\" ]; }; then\n",
+          "to": "    if [ -z \"$entry\" ]; then\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-section-warn"
+      ]
+    },
+    {
+      "name": "646-row-cap",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "($p.rows[0:$maxrows] | map(((. + [",
+          "to": "($p.rows | map(((. + ["
+        }
+      ],
+      "expect_fail": [
+        "tracker-section-limits"
+      ]
+    },
+    {
+      "name": "646-fence-decoy",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "  fc = fencechar(line)\n",
+          "to": "  fc = \"\"\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-section-table",
+        "tracker-section-warn"
+      ]
+    },
+    {
+      "name": "646-warn-order",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "printf '%s' \"$warns\"\necho \"result=ready\"\n",
+          "to": "echo \"result=ready\"\nprintf '%s' \"$warns\"\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-section-warn"
+      ]
+    },
+    {
+      "name": "646-refs-cap",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "| not)) | .[0:$max]'",
+          "to": "| not))'"
+        }
+      ],
+      "expect_fail": [
+        "tracker-section-refs"
       ]
     }
   ]
