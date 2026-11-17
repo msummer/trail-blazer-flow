@@ -491,8 +491,8 @@ named-exclusion mechanism is retained, empty, as an extension point for a future
 `no-plan`, and once you have read one and decided to keep it held, park it with
 `gh issue edit <n> --add-label triaged-held` — it then drops out of both `followups_to_triage` and
 `counts.human_actions`. To release a parked follow-up back into planning, remove `no-plan`; to see
-the parked backlog, GitHub's own issue list is now the only view (`harness-status.sh` reports
-nothing about it): `gh issue list --label triaged-held --state open`. To un-park one back into
+the parked backlog, GitHub's own issue list, or a configured live tracker (its `parked` state), is the view
+(`harness-status.sh` reports nothing about it): `gh issue list --label triaged-held --state open`. To un-park one back into
 `followups_to_triage`, remove the label: `gh issue edit <n> --remove-label triaged-held`. Check the
 top-level `degraded` boolean too
 (and `degraded_reasons`, and its `counts.degraded` mirror) — `true` means a discovery query, one

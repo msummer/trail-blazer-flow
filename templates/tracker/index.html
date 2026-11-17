@@ -16,6 +16,7 @@
   --done: #1a7f37;
   --active: #8250df;
   --wait: #9a6700;
+  --park: #1b7c83;
   --bad: #cf222e;
   --track: #e6eaee;
 }
@@ -30,6 +31,7 @@
     --done: #3fb950;
     --active: #ab7df8;
     --wait: #d29922;
+    --park: #39c5cf;
     --bad: #f85149;
     --track: #262c36;
   }
@@ -44,6 +46,7 @@
   --done: #3fb950;
   --active: #ab7df8;
   --wait: #d29922;
+  --park: #39c5cf;
   --bad: #f85149;
   --track: #262c36;
 }
@@ -93,6 +96,8 @@ table.fsec th, table.fsec td { text-align: left; vertical-align: top; padding: 4
 .counts .badge { font-size: 0.9rem; padding: 3px 10px; white-space: nowrap; }
 .counts .badge b { font-size: 1.05rem; margin-right: 4px; }
 .badge[data-s="total"] { color: var(--fg); border-color: var(--fg); }
+.badge[data-s="parked"] { color: var(--park); border-color: var(--park); }
+.badge[data-s="external"] { color: var(--accent); border-color: var(--accent); }
 .bar { height: 8px; border-radius: 4px; background: var(--track); overflow: hidden; margin: 6px 0; }
 .bar > span { display: block; height: 100%; background: var(--done); }
 button { font: inherit; background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 4px 10px; cursor: pointer; }
@@ -134,7 +139,7 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     a.setAttribute("rel", "noopener noreferrer");
     return a;
   }
-  var KNOWN = ["done", "not-planned", "needs-human", "blocked", "pr-open", "approved", "held", "planned", "unplanned", "open", "in-progress", "unconfirmed", "waiting", "merged", "closed"];
+  var KNOWN = ["done", "not-planned", "needs-human", "blocked", "pr-open", "approved", "parked", "external", "held", "planned", "unplanned", "open", "in-progress", "unconfirmed", "waiting", "merged", "closed"];
   function badge(s) {
     var b = el("span", "badge", s);
     b.setAttribute("data-s", KNOWN.indexOf(s) >= 0 ? s : "other");
@@ -284,7 +289,7 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     if (h.truncated) { meta.appendChild(el("span", "stale", "truncated")); }
     box.appendChild(meta);
     var c = h.counts || {};
-    var ORDER = ["total", "needs-human", "blocked", "pr-open", "approved", "planned", "held", "unplanned", "waiting", "done", "not-planned"];
+    var ORDER = ["total", "needs-human", "blocked", "pr-open", "approved", "planned", "parked", "external", "held", "unplanned", "waiting", "done", "not-planned"];
     var keys = ORDER.filter(function (k) { return Object.prototype.hasOwnProperty.call(c, k); });
     Object.keys(c).sort().forEach(function (k) { if (ORDER.indexOf(k) < 0) { keys.push(k); } });
     var counts = el("div", "counts");
