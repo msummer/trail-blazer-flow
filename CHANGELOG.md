@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #650: with `cycle-note: on` in the Tracker fence, each cycle writes a "Last cycle" tracker section
+  from its dispatch ledger (stage outcomes, PR and merge slugs per issue; titles joined on the
+  page). Re-publish the page to see titles and PR links.
 - #649: the tracker shows `triaged-held` issues as `parked`, and a `label-state: <label>=<state>`
   Tracker key maps a repo's own labels to `parked`, `external` or `held`. Re-publish an existing
   tracker page to see the new badge colours.

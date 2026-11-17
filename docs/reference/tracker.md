@@ -14,8 +14,9 @@ comment, and each row links to its issue, where you comment directly.
 Three parts:
 
 - `bin/tracker-sync.sh` — read-only and mechanical. It reads the repo's "Tracker" section, queries
-  `gh`, reads the checkout's local verification baseline file, and writes one snapshot file. It
-  never calls an artifact tool.
+  `gh`, reads the checkout's local verification baseline file, and writes one snapshot file; its
+  `cycle-note` mode writes the opt-in cycle note's document (see "The cycle note"). It never calls
+  an artifact tool.
 - `skills/tracker/SKILL.md` — the procedures (Create, Sync, People read-back, Hand-written update).
   Only the orchestrating session can run them: the `Artifact` and `ArtifactData` tools exist
   nowhere else.
@@ -34,6 +35,7 @@ and, optionally, `section:` and `label-state:` lines:
 url: https://<the artifact's address>
 section: milestones docs/roadmap.md#Milestones
 label-state: waiting-on-vendor=external
+cycle-note: on
 ```
 ````
 
@@ -44,11 +46,12 @@ Blank lines and `#` comment lines inside the fence are skipped; any other line i
 | `url:` | exactly once | starts `https://` and holds no whitespace, control character, quote, angle bracket or backtick (`bad-url` otherwise) |
 | `section:` | 0 to 8 | `<id> <path>#<heading>` (`bad-section` otherwise): an id of 1-40 characters from `a-z0-9-`, starting with `a-z0-9` and unique; whitespace; a repo-relative path of 1-200 characters from `A-Za-z0-9._/-` ending in `.md` (a last segment of exactly `.md` is rejected), with no leading or trailing `/` and no empty, `.` or `..` segment; `#`; and the exact heading text, trimmed, 1-120 characters, with no control character and not starting with `#` |
 | `label-state:` | 0 to 8 | `<label>=<state>` (`bad-label-state` otherwise): a label of 1-50 characters from `A-Za-z0-9 ._:/+-` (a space is allowed; whitespace before the `=` is trimmed), exactly one `=`, and a state that is exactly `parked`, `external` or `held`. The label may not be one the state chain reads itself (`plan-proposed`, `plan-approved`, `pr-open`, `impl-blocked`, `needs-human`, `no-plan`, `triaged-held`), and no two labels may be equal ignoring ASCII case |
+| `cycle-note:` | 0 or 1 | exactly `on` or `off` (`bad-cycle-note` otherwise, also for a repeated key); absent means `off` |
 
 No heading, or no `CLAUDE.md`, means the repo has no tracker. A malformed section makes each sync
 print `tracker=malformed` and `reason=<token>` (`no-fence`, `unknown-key`, `no-url`,
-`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, checked in the order `unknown-key`,
-`no-url`/`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`) and skip. The section is read from the working
+`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, `bad-cycle-note`, checked in the order `unknown-key`,
+`no-url`/`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, `bad-cycle-note`) and skip. The section is read from the working
 tree; a `section:` file is read from the default branch at the snapshot's `mainSha`, never from the
 working tree (see "Repo-file sections"). The doctor does not validate it. The section
 is committed, so a wrong URL is a reviewed change; a URL copied from another repo's tracker would
@@ -56,7 +59,7 @@ be overwritten by this repo's snapshot, and the page's `repo` field makes that v
 
 ## `tracker-sync.sh`
 
-`tracker-sync.sh` (sync) and `tracker-sync.sh page`. Exit 0 = ready or absent; 1 = malformed
+`tracker-sync.sh` (sync), `tracker-sync.sh page` and `tracker-sync.sh cycle-note <run-id> -`. Exit 0 = ready or absent; 1 = malformed
 section or skip; 2 = usage or environment error (unknown argument, not in a git repository, `jq`
 or `gh` missing). Output goes to `<absolute git-common-dir>/trail-blazer/tracker/`, never into the
 tracked tree.
@@ -78,6 +81,22 @@ skipped the same way.
 `page` writes `templates/tracker/index.html` with `@REPO_NAME@` replaced by the repo's short name
 to `<dir>/index.html` and prints `tracker=<absent|present|malformed>` (plus `url=` or `reason=`),
 `page=<dir>/index.html` and `result=ready`. It does not need a well-formed section.
+
+`cycle-note <run-id> -` reads the ledger on stdin (see "The cycle note") and prints, in this
+order, one of:
+
+| Outcome | Lines |
+|---|---|
+| no section | `tracker=absent` (exit 0) |
+| malformed | `tracker=malformed`, `reason=<token>` (exit 1) |
+| key absent or `off` | `tracker=present`, `cycle-note=off` (exit 0) |
+| skip (exit 1) | `result=skip`, then `reason=bad-run-id`, `reason=bad-ledger line=<n>`, `reason=too-large issues=<n>` or `reason=build-failed` |
+| ready | `tracker=present`, `url=`, `dir=`, `file=<dir>/last-cycle.json`, `collection=sections`, `doc=last-cycle`, `issues=<n>`, `result=ready` |
+
+In the first three rows it reads neither the run id nor stdin. It makes no `gh` call, and apart
+from short-lived temp files in `<dir>`, removed on exit, the only file it writes is
+`<dir>/last-cycle.json`, which it removes first, so a skip never leaves a stale one. It never touches `state.json`. A wrong argument count, or a third argument other than `-`, is
+exit 2 with no stdout. The `cycle-note:` key changes nothing about a sync's stdout or `state.json`.
 
 ## The snapshot document
 
@@ -170,6 +189,44 @@ can write to its database (the `admin` write rule); collaborators who cannot edi
 get a refusal when they try. A page-template upgrade is not pushed to an existing tracker: it is
 re-published by hand from the same checkout, because "re-publishing the same file path updates the
 same URL" and the page path is per checkout.
+
+## The cycle note
+
+With `cycle-note: on`, the `issue-cycle` closing step writes one more document, `sections/last-cycle`
+(`kind:"list"`, `order:-1`, so the page shows it first), from the run's dispatch ledger. The model
+never composes or reads it: `skills/issue-cycle/references/cycle-note.md` runs `tracker-sync.sh
+cycle-note` and pushes the file it names with a pinned `batch` `set`, the way Sync pushes the
+snapshot.
+
+```
+sections/last-cycle: {schema:1, title:"Last cycle", order:-1, kind:"list", titles:true, runId,
+                      finishedAt, source, updated, items:[{text, issues:[n], pr?:n}]}
+```
+
+- **Ledger grammar.** Plain records only, one per line (blank and `#` lines skipped, CR stripped):
+  `<issue> <stage> <outcome> [retries] [deploy=<slug>] [pr=<n>] [harness=<v>]`. The issue is digits
+  with no leading zero, 10 at most. The stage is `seed`, `planner`, `implementer`, `verifier` or
+  `merge`; the outcome is `-` or a slug of that stage in `bin/reconcile-ledger.sh`'s vocabulary
+  (a fixture pins that the script's copy stays equal). Each optional token appears at most once;
+  `deploy=` is merge-only, `pr=` implementer- or merge-only, `harness=` is ignored. Any other line,
+  a status line included, skips the whole note with `bad-ledger line=<n>`; no ledger text is ever
+  printed. The run id must have `harness-lock.sh`'s shape.
+- **Content.** One item per issue in ascending order: the stages present (planner, implementer,
+  verifier, merge; the last record per stage wins) as `<stage> <outcome>` joined by `; `, then
+  `deploy <slug>` when the merge record carries one; an issue with only a seed record reads
+  `not dispatched`. `pr` is the last `pr=` seen for the issue. More than 200 issues skips with
+  `too-large`. `finishedAt` is the UTC time the script ran.
+- **Rendering.** `titles:true` makes the page join each issue's title from the snapshot after its
+  `#n` link, as text; an item's `pr` is a `PR #<n>` link built from the snapshot's `repoUrl`. A
+  hand-written list without `titles` renders as before.
+- **Limits.** Titles show only for issues in the snapshot (open issues, closed issues of open
+  milestones and `refs[]`); others show a bare `#n`. Turning the key off leaves the last document
+  in place until a Hand-written update deletes it. The ledger is model-composed but checked
+  against closed vocabularies, so the document can only hold numbers and slugs. Only the
+  `issue-cycle` writes it, and the id `last-cycle` is reserved: a hand-written document with that
+  id is overwritten at the next noted cycle. Codex, headless and subagent runs have no artifact
+  tools, so they never write it. An existing page shows the note without titles or PR links until
+  it is re-published.
 
 ## Repo-file sections
 
@@ -284,7 +341,7 @@ as `awaiting-review`.
 
 ```
 sections/<id>: {schema:1, title, order:int, kind:"text"|"list"|"phases"|"matrix", text?,
-                items?:[{text, issues?:[n]}], phases?:[{name, text?, issues:[n]}],
+                titles?:bool, items?:[{text, issues?:[n], pr?:n}], phases?:[{name, text?, issues:[n]}],
                 columns?:[string], rows?:[{label, cells:[{state, text?}], issues?:[n]}],
                 legend?:{<state>:string}, source?, updated}
 people/<id>:   {schema:1, title, who?, state:"open"|"in-progress"|"done"|"unconfirmed",
@@ -310,6 +367,7 @@ tools). Headless `claude -p`, cloud routines and Codex have none of the tools ei
 2026-11-12), so there the skill and the `issue-cycle` closing step print one skip line and change
 nothing. A cycle that cannot sync leaves the last snapshot in place, and the page's `checkedAt`
 shows how old it is (flagged after 24 hours). The cycle runs the Sync after its closing
-reconciliation and before the report, and never fails, halts or reorders because of it. A sync
+reconciliation and before the report (then the cycle note, when `cycle-note: on`), and never fails,
+halts or reorders because of either. A sync
 needs the session's scratch directory for its version read. A people toggle saved from the page
 raised no permission prompt (2026-11-12, Claude Code 2.1.322).

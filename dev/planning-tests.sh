@@ -12582,6 +12582,8 @@ exit 1'
 # string, and honours reject-issues-recent. The fixtures' JSON follows the shapes
 # probed on gh 2.102.0: blockedBy is {nodes:[...],totalCount:n}, an open issue's stateReason is "".
 # Bulky inputs (the too-large and truncated fixtures) are built with jq, never hand-typed.
+# #650: the cycle-note cases run the same script in its cycle-note mode through tk_note, which feeds the
+# ledger on stdin; they share the stub gh only to prove it is never called.
 
 # tk_i NUMBER LABELS_JSON MILESTONE_NUMBER|null [BLOCKEDBY_JSON] [STATE] [STATEREASON] — one
 # `gh issue list` element; the milestone title is v<number>.
@@ -13916,6 +13918,246 @@ case_tracker_recent_truncated() {
   tk_jq "$dir" '.truncated' true
 }
 
+# tk_note DIR RUN_ID LEDGER_TEXT — the real script's cycle-note mode (#650), LEDGER_TEXT on stdin,
+# captured like run_tracker. tk_note_file is the document it writes.
+tk_note() {
+  local dir="$1" rid="$2"
+  printf '%s' "$3" > "$dir/.ledger"
+  ( cd "$dir/work" && PATH="$dir/tbin:$PATH" "$bash_bin" "$root/bin/tracker-sync.sh" cycle-note "$rid" - < "$dir/.ledger" ) >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+tk_note_file() { printf '%s' "$1/work/.git/trail-blazer/tracker/last-cycle.json"; }
+
+# mutant:650-key-once — drops the more-than-one-cycle-note-line check, so a repeated key (even an
+# equal pair) is accepted instead of bad-cycle-note.
+#
+# mutant:650-default-on — makes an absent or off key behave as on, so cycle-note mode reads the
+# ledger and writes the document when the fence never asked for it.
+#
+# mutant:650-outcome-vocab — lets the per-stage outcome check accept any outcome, so a slug
+# outside the closed vocabulary reaches the document.
+#
+# mutant:650-unknown-token — ignores an unrecognised trailing token instead of rejecting the line,
+# so free text after the outcome is accepted.
+#
+# mutant:650-stale-note — deletes the up-front removal of last-cycle.json, so a skipped run leaves
+# the previous cycle's document for the skill to push as if fresh.
+#
+# mutant:650-run-id — makes the run-id shape check always pass, so a run id of any text is
+# accepted into the document.
+
+# tracker-malformed-bad-cycle-note — a cycle-note: line that is not exactly on or off, or that
+# repeats, is bad-cycle-note; its place in the documented check order and the case-sensitive key.
+# Killed by 650-key-once.
+case_tracker_malformed_bad_cycle_note() {
+  local v
+  for v in 'cycle-note: yes' 'cycle-note:' 'cycle-note: On' 'cycle-note: on off' \
+    "$(printf 'cycle-note: on\ncycle-note: on')" "$(printf 'cycle-note: off\ncycle-note: on')"; do
+    tk_malformed tracker-malformed-bad-cycle-note "$(printf 'url: https://example.invalid/a\n%s' "$v")" bad-cycle-note
+  done
+  tk_malformed tracker-malformed-bad-cycle-note "$(printf 'url: http://example.invalid/a\ncycle-note: yes')" bad-url
+  tk_malformed tracker-malformed-bad-cycle-note "$(printf 'url: https://example.invalid/a\nsection: a\ncycle-note: yes')" bad-section
+  tk_malformed tracker-malformed-bad-cycle-note "$(printf 'url: https://example.invalid/a\nCycle-note: on')" unknown-key
+  tk_malformed tracker-malformed-bad-cycle-note 'cycle-note: on' no-url
+}
+
+# tracker-cycle-note-sync-unchanged — the key changes neither a sync's stdout nor its state.json.
+case_tracker_cycle_note_sync_unchanged() {
+  local dir out0 st0 v
+  dir="$(mk_fixture tracker-cycle-note-sync-unchanged)"
+  build_tracker_env "$dir"
+  run_tracker "$dir"
+  expect_rc 0
+  out0="$planning_out"
+  st0="$(cat "$(tk_state_file "$dir")")"
+  for v in on off; do
+    tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\ncycle-note: %s' "$v")"
+    run_tracker "$dir"
+    expect_rc 0
+    [ "$planning_out" = "$out0" ] || { __ok=0; __why="${__why}cycle-note: $v changed the sync stdout\n"; }
+    [ "$(cat "$(tk_state_file "$dir")")" = "$st0" ] || { __ok=0; __why="${__why}cycle-note: $v changed state.json\n"; }
+  done
+}
+
+# tracker-cycle-note-off — an absent or off key, no section and a malformed section read neither
+# the run id nor the ledger, make no gh call and create nothing. Killed by 650-default-on and
+# 622-absent-gh.
+case_tracker_cycle_note_off() {
+  local dir fence want
+  dir="$(mk_fixture tracker-cycle-note-off)"
+  build_tracker_env "$dir"
+  for fence in 'url: https://example.invalid/artifact/abc' "$(printf 'url: https://example.invalid/artifact/abc\ncycle-note: off')"; do
+    tk_claude "$dir" "$fence"
+    tk_note "$dir" bad-id 'garbage SENTINEL
+'
+    expect_rc 0
+    want="$(printf 'tracker=present\ncycle-note=off')"
+    [ "$planning_out" = "$want" ] || { __ok=0; __why="${__why}off stdout: got $planning_out\n"; }
+  done
+  printf '# Project\n' > "$dir/work/CLAUDE.md"
+  tk_note "$dir" bad-id 'garbage SENTINEL
+'
+  expect_rc 0
+  [ "$planning_out" = "tracker=absent" ] || { __ok=0; __why="${__why}absent stdout: got $planning_out\n"; }
+  tk_claude "$dir" 'name: x'
+  tk_note "$dir" bad-id 'garbage SENTINEL
+'
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'tracker=malformed\nreason=unknown-key')" ] || { __ok=0; __why="${__why}malformed stdout: got $planning_out\n"; }
+  expect_no_log "$dir/.gh-calls"
+  [ ! -e "$dir/work/.git/trail-blazer" ] || { __ok=0; __why="${__why}a non-on run created .git/trail-blazer\n"; }
+}
+
+# tracker-cycle-note-build — a mixed ledger becomes the exact one-line document, the exact ready
+# stdout, no gh call, no write tool fired, a byte-identical working tree and an untouched
+# state.json; a comment-only ledger gives no items.
+case_tracker_cycle_note_build() {
+  local dir t before after want ledger real
+  dir="$(mk_fixture tracker-cycle-note-build)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\ncycle-note: on')"
+  for t in touch cp ln chmod tee curl; do
+    floor_write_script "$dir" "$dir/tbin/$t" 'printf "%s\n" "${0##*/} $*" >> "__DIR__/.trap-calls"
+exit 1'
+  done
+  mkdir -p "$dir/work/.git/trail-blazer/tracker"
+  printf 'keep\n' > "$(tk_state_file "$dir")"
+  before="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md")"
+  ledger="$(printf '# a comment\n\n14 seed unplanned 0\n14 planner plan-posted 0\r\n17 seed ready_to_implement 0\n17 implementer complete 1 pr=651\n17 verifier fail 0\n17 verifier pass 0\n17 merge merged 0 deploy=verified pr=651 harness=3.6.0\n9 seed ready\n30 planner - 0\n')"$'\n'
+  tk_note "$dir" run-20260102T030405Z-42 "$ledger"
+  expect_rc 0
+  real="$(tk_real "$dir")"
+  want="$(printf 'tracker=present\nurl=https://example.invalid/artifact/abc\ndir=%s/trail-blazer/tracker\nfile=%s/trail-blazer/tracker/last-cycle.json\ncollection=sections\ndoc=last-cycle\nissues=4\nresult=ready' "$real" "$real")"
+  [ "$planning_out" = "$want" ] || { __ok=0; __why="${__why}ready stdout: got $planning_out\n"; }
+  want='{"schema":1,"title":"Last cycle","order":-1,"kind":"list","titles":true,"runId":"run-20260102T030405Z-42","finishedAt":"2026-01-02T03:04:05Z","source":"issue-cycle run-20260102T030405Z-42, finished 2026-01-02T03:04:05Z","updated":"2026-01-02T03:04:05Z","items":[{"text":"not dispatched","issues":[9]},{"text":"planner plan-posted","issues":[14]},{"text":"implementer complete; verifier pass; merge merged; deploy verified","issues":[17],"pr":651},{"text":"planner -","issues":[30]}]}'
+  [ "$(cat "$(tk_note_file "$dir")" 2>/dev/null)" = "$want" ] || { __ok=0; __why="${__why}document: got $(cat "$(tk_note_file "$dir")" 2>&1)\n"; }
+  expect_no_log "$dir/.gh-calls"
+  expect_no_log "$dir/.trap-calls"
+  [ "$(cat "$(tk_state_file "$dir")")" = "keep" ] || { __ok=0; __why="${__why}state.json was touched\n"; }
+  after="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md")"
+  [ "$before" = "$after" ] || { __ok=0; __why="${__why}the working tree changed\n"; }
+  tk_note "$dir" run-20260102T030405Z-42 '# only a comment
+'
+  expect_rc 0
+  expect_floor_line "issues=0"
+  [ "$(jq -c '.items' "$(tk_note_file "$dir")" 2>&1)" = "[]" ] || { __ok=0; __why="${__why}empty ledger items not []\n"; }
+}
+
+# tk_note_reject DIR RUN_ID LEDGER REASON — a skip: exactly result=skip and reason=REASON, exit 1,
+# no document left behind (a stale one is seeded first), no ledger text on stdout or stderr.
+tk_note_reject() {
+  local dir="$1"
+  mkdir -p "$dir/work/.git/trail-blazer/tracker"
+  printf 'stale\n' > "$(tk_note_file "$dir")"
+  tk_note "$dir" "$2" "$3"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=%s' "$4")" ] || { __ok=0; __why="${__why}[$2 / $3] expected skip $4, got $planning_out\n"; }
+  [ ! -e "$(tk_note_file "$dir")" ] || { __ok=0; __why="${__why}[$3] a stale last-cycle.json survived\n"; }
+  case "$planning_out$planning_err" in
+    *SENTINEL*) __ok=0; __why="${__why}[$3] ledger text reached stdout or stderr\n" ;;
+  esac
+}
+
+# tracker-cycle-note-reject — every invalid ledger line, run id and oversized ledger is a skip.
+# Killed by 650-outcome-vocab, 650-unknown-token, 650-stale-note and 650-run-id.
+case_tracker_cycle_note_reject() {
+  local dir l rid good i big
+  dir="$(mk_fixture tracker-cycle-note-reject)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\ncycle-note: on')"
+  rid=run-20260102T030405Z-42
+  good='14 planner plan-posted 0
+'
+  while IFS= read -r l; do
+    tk_note_reject "$dir" "$rid" "$l"$'\n' "bad-ledger line=1"
+  done <<'LEDGERS'
+14 planner SENTINEL
+14 planner plan-posted 0 SENTINEL
+14 planner plan-posted pr=5
+14 verifier pass deploy=verified
+14 merge merged deploy=SENTINEL
+14 merge merged pr=0
+14 merge merged deploy=verified deploy=pending
+014 planner plan-posted
+x planner plan-posted
+14 bogus plan-posted
+<!-- harness-status: stage=planner issue=14 outcome=plan-posted retries=0 -->
+14 seed SENTINEL
+14 planner plan-posted 0 1
+LEDGERS
+  tk_note_reject "$dir" "$rid" "$good$good"'14 planner SENTINEL
+' "bad-ledger line=3"
+  for l in run-bad run-20260102T030405Z- run-20260102T030405Z-12345678901 SENTINEL; do
+    tk_note_reject "$dir" "$l" "$good" "bad-run-id"
+  done
+  big="$(i=1; while [ "$i" -le 201 ]; do printf '%s planner plan-posted 0\n' "$i"; i=$((i + 1)); done)"$'\n'
+  tk_note_reject "$dir" "$rid" "$big" "too-large issues=201"
+  expect_no_log "$dir/.gh-calls"
+}
+
+# tracker-cycle-note-vocab — every outcome, seed bucket and deploy slug bin/reconcile-ledger.sh
+# accepts is accepted by cycle-note mode, so the script's copy of the vocabulary cannot drift.
+case_tracker_cycle_note_vocab() {
+  local dir rl stage slugs seeds deploys s d ledger="" n=0
+  dir="$(mk_fixture tracker-cycle-note-vocab)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\ncycle-note: on')"
+  rl="$root/bin/reconcile-ledger.sh"
+  deploys="$(sed -nE 's/^DEPLOY_OUTCOMES="([^"]*)"$/\1/p' "$rl")"
+  seeds="$(sed -nE 's/^ +(unplanned\|[a-z_|]+)\) ;;$/\1/p' "$rl" | tr '|' ' ')"
+  [ -n "$deploys" ] && [ -n "$seeds" ] || { __ok=0; __why="${__why}could not extract the deploy or seed vocabulary from reconcile-ledger.sh\n"; return 0; }
+  for s in $seeds; do
+    n=$((n + 1)); ledger="$ledger$n seed $s"$'\n'
+  done
+  for stage in planner implementer verifier merge; do
+    slugs="$(sed -nE "s/^ +$stage\) +printf '%s' '([^']*)' ;;\$/\1/p" "$rl")"
+    [ -n "$slugs" ] || { __ok=0; __why="${__why}could not extract the $stage vocabulary from reconcile-ledger.sh\n"; return 0; }
+    for s in $slugs; do
+      n=$((n + 1)); ledger="$ledger$n $stage $s"$'\n'
+      if [ "$stage" = "merge" ]; then
+        for d in $deploys; do
+          n=$((n + 1)); ledger="$ledger$n $stage $s 0 deploy=$d"$'\n'
+        done
+      fi
+    done
+  done
+  tk_note "$dir" run-20260102T030405Z-42 "$ledger"
+  expect_rc 0
+  expect_floor_line "issues=$n"
+  expect_floor_line "result=ready"
+  for stage in planner implementer verifier merge; do
+    for s in $(sed -nE "s/^ +$stage\) +printf '%s' '([^']*)' ;;\$/\1/p" "$rl"); do
+      grep -qF -- "\"text\":\"$stage $s\"" "$(tk_note_file "$dir")" || { __ok=0; __why="${__why}document lacks $stage $s\n"; }
+    done
+  done
+  for d in $deploys; do
+    grep -qF -- "deploy $d\"" "$(tk_note_file "$dir")" || { __ok=0; __why="${__why}document lacks deploy $d\n"; }
+  done
+}
+
+# tracker-cycle-note-usage — a wrong argument count or a third argument other than - is exit 2
+# with empty stdout and no gh call.
+case_tracker_cycle_note_usage() {
+  local dir; dir="$(mk_fixture tracker-cycle-note-usage)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\ncycle-note: on')"
+  run_tracker "$dir" cycle-note
+  expect_rc 2
+  expect_empty_out
+  run_tracker "$dir" cycle-note run-x
+  expect_rc 2
+  expect_empty_out
+  run_tracker "$dir" cycle-note run-x ledger.txt
+  expect_rc 2
+  expect_empty_out
+  run_tracker "$dir" cycle-note run-x - extra
+  expect_rc 2
+  expect_empty_out
+  expect_no_log "$dir/.gh-calls"
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -14238,6 +14480,13 @@ cases=(
   "tracker-waiting-autonomy|case_tracker_waiting_autonomy|#645: plan-proposed is suppressed only by a fence-aware auto-approval policy heading or an autonomous Autonomy mode section"
   "tracker-query-failed-issues-recent|case_tracker_query_failed_issues_recent|#644: a failing or non-array recent-closed search skips, removes the stale state.json"
   "tracker-recent-truncated|case_tracker_recent_truncated|#644: reaching the recent closed-issue limit sets truncated"
+  "tracker-malformed-bad-cycle-note|case_tracker_malformed_bad_cycle_note|#650: a cycle-note: value other than on or off, or a repeated key, is bad-cycle-note, checked after bad-section"
+  "tracker-cycle-note-sync-unchanged|case_tracker_cycle_note_sync_unchanged|#650: the cycle-note key changes neither the sync's stdout nor its state.json"
+  "tracker-cycle-note-off|case_tracker_cycle_note_off|#650: cycle-note mode with the key absent or off, no section or a malformed one reads nothing, calls no gh and creates nothing"
+  "tracker-cycle-note-build|case_tracker_cycle_note_build|#650: a mixed ledger becomes the exact last-cycle document and ready stdout, with no gh call and no write outside the tracker directory"
+  "tracker-cycle-note-reject|case_tracker_cycle_note_reject|#650: each invalid ledger line, run id and an oversized ledger skips by reason and line number, leaves no stale document and echoes no ledger text"
+  "tracker-cycle-note-vocab|case_tracker_cycle_note_vocab|#650: every outcome, seed bucket and deploy slug of bin/reconcile-ledger.sh is accepted by cycle-note mode"
+  "tracker-cycle-note-usage|case_tracker_cycle_note_usage|#650: a wrong argument count or a third argument other than - is exit 2 with no stdout and no gh call"
 )
 
 # MEASURED MUTANTS (#275/#281) — #281 replaced #275's exclusion-based $planC test

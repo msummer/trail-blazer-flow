@@ -1025,7 +1025,7 @@ still applies.
 
 `issue-cycle`'s closing tracker sync (the `tracker` skill) has no artifact tools to run on Codex:
 print `tracker: skipped — artifact tools unavailable in this session` in the report, run no
-`tracker-sync.sh`, and carry on.
+`tracker-sync.sh` (neither the sync nor the cycle note), and carry on.
 
 ### Standalone `test-ratchet` on Codex
 

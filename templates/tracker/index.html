@@ -490,8 +490,10 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
         (it.issues || []).forEach(function (n) {
           var issue = byNum[n];
           row.appendChild(link("#" + n, issue ? issue.url : (repoUrl ? repoUrl + "/issues/" + n : "")));
+          if (issue && d.titles === true) { row.appendChild(el("span", "muted", String(issue.title || ""))); }
           if (issue) { row.appendChild(badge(String(issue.state))); }
         });
+        if (Number.isInteger(it.pr) && it.pr > 0 && repoUrl) { row.appendChild(link("PR #" + it.pr, repoUrl + "/pull/" + it.pr)); }
         c2.appendChild(row);
       });
       box.appendChild(c2);

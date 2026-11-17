@@ -6,16 +6,18 @@
 # `tracker` skill — the only place the Artifact/ArtifactData tools exist — pushes that file to the
 # tracker's database. This script never calls an artifact tool and never writes to GitHub.
 #
-# USAGE: tracker-sync.sh [page] [-h|--help]
+# USAGE: tracker-sync.sh [page | cycle-note <run-id> -] [-h|--help]
 #   (no argument)  sync mode: read the repo's "Tracker" section, query GitHub, write state.json.
 #   page           write a copy of templates/tracker/index.html with @REPO_NAME@ replaced by the
 #                  repo's short name, to the same directory, for the skill to publish.
+#   cycle-note <run-id> -   with `cycle-note: on` in the section, read dispatch-ledger records from
+#                  stdin and write <dir>/last-cycle.json, the opt-in cycle note's document (#650).
 #
 # THE "TRACKER" SECTION of the working-tree CLAUDE.md: a heading titled exactly "Tracker" (any '#'
 # depth) whose FIRST fenced block holds `url: https://...` and, optionally, up to 8 repeatable
-# `section: <id> <path>#<heading>` lines and up to 8 repeatable `label-state: <label>=<state>`
-# lines — blank lines and '#' comment lines are skipped; any other
-# line is an unknown key. Exactly one url is required, https, no whitespace, quote, angle bracket
+# `section: <id> <path>#<heading>` lines, up to 8 repeatable `label-state: <label>=<state>`
+# lines and at most one `cycle-note: on|off` line — blank lines and '#' comment lines are
+# skipped; any other line is an unknown key. Exactly one url is required, https, no whitespace, quote, angle bracket
 # or backtick. A section value is an id of 1-40 [a-z0-9-] characters (unique, starting with
 # [a-z0-9]), whitespace, a repo-relative .md path of [A-Za-z0-9._/-] (no leading or trailing '/',
 # no empty, '.' or '..' segment, at most 200 characters), '#', and an exact heading of 1-120
@@ -33,7 +35,8 @@
 # STDOUT, sync mode:
 #   no section:  tracker=absent                      (exit 0; no gh call, nothing written)
 #   malformed:   tracker=malformed, then reason=<no-fence|unknown-key|no-url|multiple-urls|bad-url|
-#                bad-section|bad-label-state>, checked in that order (exit 1; no gh call, nothing written)
+#                bad-section|bad-label-state|bad-cycle-note>, checked in that order (exit 1; no gh
+#                call, nothing written)
 #   skip:        result=skip, then reason=query-failed site=<repo|milestones|issues-open|
 #                issues-closed|issues-recent|prs|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
 #                reason=build-failed
@@ -44,6 +47,13 @@
 #                dropped section (tokens section-missing|section-too-large|section-no-heading|
 #                section-empty, in declaration order), then result=ready
 # <dir> is <absolute git-common-dir>/trail-blazer/tracker — never inside the tracked tree.
+# STDOUT, cycle-note mode: tracker=absent (exit 0) or tracker=malformed, reason=<token> (exit 1) as in
+#   sync mode; tracker=present, cycle-note=off (exit 0) when the key is absent or off — in these three
+#   neither the run id nor stdin is read; else result=skip with reason=bad-run-id |
+#   bad-ledger line=<n> | too-large issues=<n> | build-failed (exit 1, no ledger text printed), or
+#   tracker=present, url, dir, file=<dir>/last-cycle.json, collection=sections, doc=last-cycle,
+#   issues=<n>, result=ready. A stale last-cycle.json is removed first; no gh call; state.json is
+#   never touched. A wrong argument count or a third argument other than - is exit 2.
 # STDOUT, page mode: tracker=<absent|present|malformed>, then url=<url> (present) or
 #   reason=<token> (malformed), then page=<dir>/index.html and result=ready; a failed repo read is
 #   result=skip with reason=query-failed site=repo, and an unusable repo name is
@@ -51,8 +61,8 @@
 #
 # READ-ONLY toward GitHub: only `gh repo view`, `gh issue list`, `gh pr list` and GET `gh api`
 # calls (a declared file is read through GET git/trees and git/blobs at the default branch's
-# commit; its path is only compared as data inside jq, never put in a URL, argv or shell). The only files written are state.json, index.html and
-# short-lived temp files in <dir>.
+# commit; its path is only compared as data inside jq, never put in a URL, argv or shell). The only files written are state.json, index.html,
+# last-cycle.json and short-lived temp files in <dir>.
 # No retry: any failed call fails closed and the next sync heals it; GitHub stays the source of
 # truth and the snapshot is a projection.
 #
@@ -133,6 +143,15 @@ PR_FIELDS="number,url,state,headRefName,title,author,isDraft,mergedAt,mergedBy,b
 RECENT_DAYS=14
 RECENT_LIMIT=200
 RECENT_FIELDS="number,title,url,state,stateReason,closedAt"
+# Cycle-note vocabularies (#650): mirror bin/reconcile-ledger.sh's vocab(), seed case and
+# DEPLOY_OUTCOMES; the tracker-cycle-note-vocab fixture pins that they stay equal.
+NOTE_SEED="unplanned in_revision ready_to_implement needs_initial_plan needs_revision ready"
+NOTE_PLANNER="plan-posted plan-revised incomplete died"
+NOTE_IMPLEMENTER="complete blocked incomplete died"
+NOTE_VERIFIER="pass fail incomplete died"
+NOTE_MERGE="merged merge-blocked not-eligible merge-unconfirmed"
+NOTE_DEPLOY="verified pending failed"
+MAX_NOTE_ISSUES=200
 
 usage() {
   sed -n '3,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -142,11 +161,19 @@ mode="sync"
 case "${1:-}" in
   "") : ;;
   page) mode="page" ;;
+  cycle-note) mode="cycle-note" ;;
   -h|--help) usage; exit 0 ;;
-  *) echo "tracker-sync.sh: unknown argument: $1 (usage: tracker-sync.sh [page])" >&2; exit 2 ;;
+  *) echo "tracker-sync.sh: unknown argument: $1 (usage: tracker-sync.sh [page | cycle-note <run-id> -])" >&2; exit 2 ;;
 esac
-if [ "$#" -gt 1 ]; then
-  echo "tracker-sync.sh: too many arguments (usage: tracker-sync.sh [page])" >&2
+note_run_id=""
+if [ "$mode" = "cycle-note" ]; then
+  if [ "$#" -ne 3 ] || [ "$3" != "-" ]; then
+    echo "tracker-sync.sh: cycle-note takes a run id and - (usage: tracker-sync.sh [page | cycle-note <run-id> -])" >&2
+    exit 2
+  fi
+  note_run_id="$2"
+elif [ "$#" -gt 1 ]; then
+  echo "tracker-sync.sh: too many arguments (usage: tracker-sync.sh [page | cycle-note <run-id> -])" >&2
   exit 2
 fi
 
@@ -166,6 +193,7 @@ script_dir="$(cd "$(dirname "$0")" && pwd -P)"
 tracker_state="absent"
 tracker_url=""
 tracker_reason=""
+tracker_cycle_note="off"
 
 # The declared repo-file sections, filled by parse_section_values: sec_n entries in declaration
 # order. Always iterate by index up to sec_n, never "${sec_id[@]}": an empty array is an unbound
@@ -277,7 +305,7 @@ parse_label_states() {
 }
 
 parse_section() {
-  local cm="$top/CLAUDE.md" section fence line v urls=0 unknown=0
+  local cm="$top/CLAUDE.md" section fence line v urls=0 unknown=0 cnotes=0 cn_val=""
   [ -f "$cm" ] || return 0
   # Fence-aware like bin/check-harness.sh's claude_md_section: a heading inside a fenced block
   # neither starts the section nor ends it. The first output line is a marker proving the heading.
@@ -335,6 +363,13 @@ parse_section() {
         ls_n=$((ls_n + 1))
         ls_raw="$ls_raw$v"$'\n'
         ;;
+      cycle-note:*)
+        v="${v#cycle-note:}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+        cnotes=$((cnotes + 1))
+        cn_val="$v"
+        ;;
       *) unknown=1 ;;
     esac
   done <<<"$fence"
@@ -354,6 +389,13 @@ parse_section() {
   esac
   if ! parse_section_values; then tracker_reason="bad-section"; return 0; fi
   if ! parse_label_states; then tracker_reason="bad-label-state"; return 0; fi
+  if [ "$cnotes" -gt 1 ]; then tracker_reason="bad-cycle-note"; return 0; fi
+  if [ "$cnotes" -eq 1 ]; then
+    case "$cn_val" in
+      on|off) tracker_cycle_note="$cn_val" ;;
+      *) tracker_reason="bad-cycle-note"; return 0 ;;
+    esac
+  fi
   tracker_state="present"
   tracker_reason=""
 }
@@ -365,11 +407,16 @@ skip() {
   exit 1
 }
 
-if [ "$mode" = "sync" ]; then
+if [ "$mode" != "page" ]; then
   case "$tracker_state" in
     absent) echo "tracker=absent"; exit 0 ;;
     malformed) echo "tracker=malformed"; echo "reason=$tracker_reason"; exit 1 ;;
   esac
+fi
+if [ "$mode" = "cycle-note" ] && [ "$tracker_cycle_note" != "on" ]; then
+  echo "tracker=present"
+  echo "cycle-note=off"
+  exit 0
 fi
 
 if ! command -v gh >/dev/null 2>&1; then
@@ -414,6 +461,106 @@ if [ "$mode" = "page" ]; then
   sed "s#@REPO_NAME@#$name#g" "$tmpl" > "$work/index.html" || skip "build-failed"
   mv "$work/index.html" "$dir/index.html" || skip "build-failed"
   echo "page=$dir/index.html"
+  echo "result=ready"
+  exit 0
+fi
+
+# --- cycle-note mode (#650) -------------------------------------------------------------------
+# Reads plain dispatch-ledger records on stdin, validates every field against closed vocabularies
+# and writes <dir>/last-cycle.json. Ledger text never reaches stdout or stderr; a bad line is
+# reported by number only. Makes no gh call.
+NOTE_AWK='
+function inset(w, set,   a, n, i) {
+  n = split(set, a, " ")
+  for (i = 1; i <= n; i++) if (a[i] == w) return 1
+  return 0
+}
+function isnum(s) { return (s ~ /^[1-9][0-9]*$/ && length(s) <= 10) }
+function flag(ln) { if (!bad) { bad = 1; badline = ln } }
+{
+  sub(/\r$/, "")
+  if (NF == 0 || $1 ~ /^#/) next
+  ok = 1
+  if (NF < 3 || !isnum($1)) ok = 0
+  st = $2; oc = $3
+  if (ok) {
+    if (st == "seed") ok = (oc == "-" || inset(oc, seed))
+    else if (st == "planner") ok = (oc == "-" || inset(oc, pl))
+    else if (st == "implementer") ok = (oc == "-" || inset(oc, im))
+    else if (st == "verifier") ok = (oc == "-" || inset(oc, ve))
+    else if (st == "merge") ok = (oc == "-" || inset(oc, me))
+    else ok = 0
+  }
+  dp = "-"; pr = "-"; sr = 0; sd = 0; sp = 0; sh = 0
+  for (i = 4; ok && i <= NF; i++) {
+    t = $i
+    if (t ~ /^[0-9]+$/ && length(t) <= 4) { if (sr) ok = 0; sr = 1 }
+    else if (t ~ /^deploy=/) {
+      v = substr(t, 8)
+      if (sd || st != "merge" || !inset(v, dep)) ok = 0
+      sd = 1; dp = v
+    }
+    else if (t ~ /^pr=/) {
+      v = substr(t, 4)
+      if (sp || (st != "implementer" && st != "merge") || !isnum(v)) ok = 0
+      sp = 1; pr = v
+    }
+    else if (t ~ /^harness=[A-Za-z0-9.+-]+$/ && length(t) <= 40) { if (sh) ok = 0; sh = 1 }
+    else ok = 0
+  }
+  if (!ok) { flag(NR); next }
+  printf "%s\t%s\t%s\t%s\t%s\n", $1, st, oc, dp, pr
+}
+END { if (bad) printf "BAD\t%d\n", badline }
+'
+NOTE_JQ='
+split("\n") | map(select(length > 0) | split("\t") | {i: (.[0] | tonumber), s: .[1], o: .[2], d: .[3], p: .[4]})
+| group_by(.i)
+| map(
+    . as $g
+    | (reduce $g[] as $r ({}; .[$r.s] = {o: $r.o, d: $r.d})) as $st
+    | ([ $g[] | select(.p != "-") | .p ] | .[-1]) as $pr
+    | ([ ("planner", "implementer", "verifier", "merge") as $s | select($st[$s] != null) | "\($s) \($st[$s].o)" ]
+       + (if $st.merge != null and $st.merge.d != "-" then ["deploy " + $st.merge.d] else [] end)) as $parts
+    | {text: (if ($parts | length) == 0 then "not dispatched" else ($parts | join("; ")) end), issues: [$g[0].i]}
+      + (if $pr != null then {pr: ($pr | tonumber)} else {} end)
+  ) as $items
+| {schema: 1, title: "Last cycle", order: -1, kind: "list", titles: true, runId: $rid, finishedAt: $at,
+   source: ("issue-cycle " + $rid + ", finished " + $at), updated: $at, items: $items}
+'
+if [ "$mode" = "cycle-note" ]; then
+  rm -f "$dir/last-cycle.json"
+  nd='[0123456789]'
+  case "$note_run_id" in
+    run-$nd$nd$nd$nd$nd$nd$nd${nd}T$nd$nd$nd$nd$nd${nd}Z-*) : ;;
+    *) skip "bad-run-id" ;;
+  esac
+  note_suffix="${note_run_id#run-????????T??????Z-}"
+  case "$note_suffix" in
+    ""|*[!0123456789]*) skip "bad-run-id" ;;
+  esac
+  [ "${#note_suffix}" -le 10 ] || skip "bad-run-id"
+  cat > "$work/ledger.txt" || skip "build-failed"
+  LC_ALL=C awk -v seed="$NOTE_SEED" -v pl="$NOTE_PLANNER" -v im="$NOTE_IMPLEMENTER" \
+    -v ve="$NOTE_VERIFIER" -v me="$NOTE_MERGE" -v dep="$NOTE_DEPLOY" \
+    "$NOTE_AWK" "$work/ledger.txt" > "$work/ledger.tsv" || skip "build-failed"
+  note_bad="$(sed -n 's/^BAD\t\([0-9][0-9]*\)$/\1/p' "$work/ledger.tsv" 2>/dev/null)"
+  [ -z "$note_bad" ] || skip "bad-ledger line=$note_bad"
+  at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+  jq -R -s -c --arg rid "$note_run_id" --arg at "$at" "$NOTE_JQ" "$work/ledger.tsv" > "$work/last-cycle.json" 2>/dev/null || skip "build-failed"
+  n="$(jq '.items | length' "$work/last-cycle.json" 2>/dev/null)"
+  case "$n" in
+    ""|*[!0123456789]*) skip "build-failed" ;;
+  esac
+  [ "$n" -le "$MAX_NOTE_ISSUES" ] || skip "too-large issues=$n"
+  mv "$work/last-cycle.json" "$dir/last-cycle.json" || skip "build-failed"
+  echo "tracker=present"
+  echo "url=$tracker_url"
+  echo "dir=$dir"
+  echo "file=$dir/last-cycle.json"
+  echo "collection=sections"
+  echo "doc=last-cycle"
+  echo "issues=$n"
   echo "result=ready"
   exit 0
 fi
