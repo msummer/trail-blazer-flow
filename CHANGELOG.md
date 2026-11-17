@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #644, #645: the tracker shows what shipped in the last 14 days (flagging merges with no second
+  review) and a "Waiting on you" block, including open PRs that link to no issue. Re-publish an
+  existing tracker page to see them.
 - #646: the "Tracker" fence takes up to eight `section: <id> <path>#<heading>` lines; each sync
   projects the first table or list under that heading of a committed `.md` file onto the page and
   shows the live state of closed issues its rows reference. A dropped section is a `warn=` line.

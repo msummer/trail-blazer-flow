@@ -5,7 +5,8 @@
 > [README](../../README.md) — the [index](README.md#where-each-section-lives) says which file holds it.
 
 A repo can have one **live tracker**: a private artifact page showing every open milestone's issues
-with their state, PR links, dependencies and progress. GitHub stays the source of truth; the tracker
+with their state, PR links, dependencies and progress, what is waiting on you, and what shipped
+in the last 14 days. GitHub stays the source of truth; the tracker
 is a projection of it, rebuilt in full on every sync, so a missed or failed sync fixes itself on
 the next one. **Nothing flows from the tracker to GitHub**: it never changes an issue, label, PR or
 comment, and each row links to its issue, where you comment directly.
@@ -65,7 +66,7 @@ Sync prints, one `key=value` per line:
 | no section | `tracker=absent` (no `gh` call, nothing written) |
 | malformed | `tracker=malformed`, `reason=<token>` (exit 1, no `gh` call) |
 | ready | `tracker=present`, `url=`, `dir=`, `file=<dir>/state.json`, `collection=harness`, `doc=state`, `issues=<n>`, `milestones=<m>`, `truncated=<true\|false>`, `checked=<checkedAt>`, then one `warn=<token> section=<id>` line per dropped section (tokens `section-missing`, `section-too-large`, `section-no-heading`, `section-empty`, in declaration order), then `result=ready` |
-| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|prs\|branch\|ci\|tree\|section\|issues-refs>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
+| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|issues-recent\|prs\|branch\|ci\|tree\|section\|issues-refs>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
 
 Every `gh` call is a read (`repo view`, `issue list`, `pr list`, GET `api`), and none is retried:
 any failure fails closed, removes `state.json` (a stale one from an earlier run included) and
@@ -91,14 +92,18 @@ One document, `harness/state`, written only by Sync as a full `set`:
  counts:{<state>:n..., total, waiting},
  sections:[{id,title,kind:"table",source,columns:[..],rows:[{cells:[..],issues:[n..]}],truncated}
           |{id,title,kind:"list",source,rows:[{text,issues:[n..]}],truncated}],
- refs:[{number,title,url,state}]}
+ refs:[{number,title,url,state}],
+ recentSince, recent:[...], openPrs:[...], waitingOnYou:[...]}
 ```
 
 `sections` and `refs` are always present, and empty when the "Tracker" section declares no
 `section:`.
 
-Issues are sorted by number, milestones by due date (none last), then number. Scope: the open and
-closed issues of the open milestones (only the first 100 open milestones are read), plus every
+The last four keys are described under "Recently shipped and waiting on you"; they are additive,
+so `schema` stays 1.
+
+Issues are sorted by number, milestones by due date (none last), then number. Scope of `issues[]`:
+the open and closed issues of the open milestones (only the first 100 open milestones are read), plus every
 other open issue. An open issue with no milestone, or whose milestone is closed or not read, is
 listed with `milestone` null and shown under "No milestone". A milestone's `open` and
 `closed` count the issues listed. `refs` holds the closed issues that a section row references by
@@ -115,7 +120,7 @@ a milestone's counts. `state`, first match wins:
 8. otherwise `unplanned`
 
 `pr` is the highest-numbered PR whose head branch is `claude/<n>-...` (the harness's own
-branches); a human-authored PR is not linked. `blockedBy` is GitHub's native issue dependencies
+branches); a human-authored PR is not linked there (it still appears in `openPrs`). `blockedBy` is GitHub's native issue dependencies
 only, and `waiting` is true iff any blocker is open. One snapshot document, rather than one per
 issue, means a sync carries a single `if_version` (the database refuses a write to an existing
 document without one), needs no chunking and no deletes for issues that leave scope, and updates
@@ -136,15 +141,17 @@ starts with the baseline commit, and `null` without a baseline; the page shows "
 main" only when it is `false`.
 
 Honest limits: PR links come from the newest 200 PRs only, so an older issue's PR may show no link
-(this does not set `truncated`). `truncated` is true when the open list reaches 1,000 issues, a milestone's closed
-list reaches 500, or a dependency list is longer than GitHub returned.
+(this does not set `truncated`). `truncated` is true when the open list reaches 1,000 issues, a
+milestone's closed list reaches 500, the recent closed-issue search reaches 200, or a dependency
+list is longer than GitHub returned.
 CI reads check runs only (a CI that reports only legacy commit statuses shows "no checks"), and only
 the first 100 runs GitHub returns, so a check whose newest run is not among them is not shown; a
 token without checks read access makes every sync skip with `site=ci`. The baseline belongs to the
 machine that syncs: another checkout's baseline is not seen, and a missing file shows "no baseline".
 Baseline command names and outcomes are stored in the artifact too.
-Issue titles, PR links, people notes and the content of every declared repo-file section of a
-private repo are stored in the artifact: it is created private, and sharing it exposes them to the people you share with. Only owners and editors
+Issue and PR titles, author and merger logins, head branch names, people notes and the content of
+every declared repo-file section of a private repo are stored in the artifact: it is created
+private, and sharing it exposes them to the people you share with. Only owners and editors
 can write to its database (the `admin` write rule); collaborators who cannot edit see the page but
 get a refusal when they try. A page-template upgrade is not pushed to an existing tracker: it is
 re-published by hand from the same checkout, because "re-publishing the same file path updates the
@@ -193,6 +200,46 @@ large repo's tree read can come back truncated, and the file then reads as missi
 only the newest 500 closed issues; section content counts toward the 1,000,000-byte snapshot cap,
 so eight large sections plus a large issue set can make the whole sync skip with `too-large`.
 
+## Recently shipped and waiting on you
+
+Two page blocks, "Waiting on you" then "Recently shipped", read four snapshot keys that
+`bin/tracker-sync.sh` projects in a second jq pass over the finished snapshot. A snapshot without
+those keys, or a page without the blocks, shows no such block; the page needs a manual re-publish
+(above) to gain them.
+
+- `recentSince` is `checkedAt` minus 14 days, computed from that one timestamp (no second clock
+  read). `recent[]` lists, newest first, every PR merged and every issue closed since then. A PR row
+  is `{kind:"pr", number, title, url, mergedAt, author, mergedBy, issue, ci, verifier, soloMerge}`;
+  an issue row is `{kind:"issue", number, title, url, closedAt, state:"done"|"not-planned"}`. One
+  extra query, site `issues-recent`, searches closed issues by day, and the script filters again on
+  the exact time. `author` and `mergedBy` are logins only, never display names.
+- `issue` is `<n>` from a `claude/<n>-` head branch, else null. `ci` is `none`, `pending`,
+  `passing` or `failing` from the PR's check rollup; a conclusion outside the passing set
+  (`SUCCESS`, `NEUTRAL`, `SKIPPED`) and the pending set reads `failing`. `verifier` is
+  `pass|fail|incomplete|died` from the last `<!-- harness-status: stage=verifier issue=<n> outcome=<token> `
+  line in the PR body whose `<n>` is the linked issue, else null; no other body text is stored.
+  `soloMerge` is true when the author and the merger are the same login and no other login's latest
+  review is `APPROVED` (the author's own approval is not a second review). It is a flag, never an
+  error: when one account both authors and merges, most such PRs carry it.
+- `openPrs[]` lists every open PR, whatever its branch or author, sorted by number:
+  `{number, title, url, author, headRefName, issue, draft, ci, reasons}`. `reasons` is
+  `ci-failing` (when `ci` is `failing`) then `awaiting-review` (no non-author `APPROVED` latest
+  review); a draft has none.
+- `waitingOnYou[]` is `{kind:"issue"|"pr", number, reason}`: each `needs-human` issue
+  (`needs-human`), each `planned` issue (`plan-proposed`), the first reason of each open PR that has
+  one, and each solo merge in `recent` (`solo-merge`), sorted by reason in that order, then number.
+  `plan-proposed` items are left out when auto-approval is in force: the working-tree `CLAUDE.md`
+  (like the "Tracker" section) has a heading titled exactly "Plan auto-approval policy", or an
+  "Autonomy mode" heading whose section's first fence has a first `mode:` line with the value
+  `autonomous`. Headings inside fenced blocks are ignored.
+
+Honest limits: `recent` and `openPrs` come from the newest 200 PRs, so an open PR older than
+those is missing. More than 200 closed issues in the window sets `truncated`. The verifier token is
+read from the PR body, which anyone who can edit the PR can write, so it is a hint and never
+provenance (the merge floor's archive cross-check is). `soloMerge` uses latest reviews only. No
+governance-path reason is computed: a PR the merge floor would hold for a governance path shows only
+as `awaiting-review`.
+
 ## The skill's procedures
 
 - **Create**: `tracker-sync.sh page`; stop on `present` or `malformed`; publish the page with
@@ -204,7 +251,7 @@ so eight large sections plus a large issue set can make the whole sync skip with
   the document's `version`, then one `batch` `set` with `file_path` (the printed `file=`) and
   `if_version`. The version comes only from the `get` result: a copy saved in the scratch
   directory, for example by an earlier sync, is never read and never pushed. A version conflict is
-  re-read and re-sent once. The skill never reads the snapshot inline, so issue titles never enter
+  re-read and re-sent once. The skill never reads the snapshot inline, so issue and PR titles never enter
   the model's context. It skips with one line when the session has no scratch directory, when the
   `get` returns an error, or when the `get` result shows no version, and never falls back to a
   `get` without `out_dir`.
