@@ -43,10 +43,17 @@ declared "Plan auto-approval policy" or "Merge autonomy policy" still applies in
   loosening, below.
 - **Overlap clause, loosened for this grant.** For an in-scope issue, the hard floor's overlap
   clause blocks auto-approval only when the plan overlaps a pending plan (`plan-proposed` or
-  `plan-approved`) **outside** the scope. Overlap with another in-scope plan does not block:
+  `plan-approved`) **outside** the scope, on a path other than the declared changelog file.
+  Overlap with another in-scope plan does not block:
   this run's own sequencing is the human call the clause defers to — overlapping issues never
   share a wave, and rule (c) below holds an issue behind an in-scope open PR it overlaps.
-  Outside a full-auto grant the clause is unchanged in every mode.
+  Before step 6b's first evaluation in this run (carry-over candidates included), run
+  `changelog-merge.sh --declared` once from the main checkout. On `changelog=declared`, the one
+  repo-relative path on its `file=` line is left out of the comparison against out-of-scope
+  plans (any other spelling of it, a glob or a directory, still counts, as in rule (b)); any
+  other result (`changelog=absent`, `changelog=malformed`, exit 2, a crash) exempts nothing. The
+  approval's audit comment names each out-of-scope pending plan the approved plan overlaps only
+  on that file. Outside a full-auto grant the clause is unchanged in every mode.
 - **Merge.** Step 3's activation (1) holds for harness PRs of in-scope issues only, under the
   implied-policy rules: never Dependabot, never `--allow-no-ci`. Activation (2), the lifted
   `gh pr merge` deny, is unchanged: guard (c) is loud, and the grant never touches settings.
