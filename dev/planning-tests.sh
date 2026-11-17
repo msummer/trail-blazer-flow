@@ -12633,6 +12633,9 @@ case "$1 $2" in
       repos/*/branches/*)
         if fire branch; then echo "stub: simulated failure" >&2; exit 1; fi
         cat "__DIR__/branch.json"; exit 0 ;;
+      repos/*/commits/*/check-runs*)
+        if fire ci; then echo "stub: simulated failure" >&2; exit 1; fi
+        cat "__DIR__/ci.json"; exit 0 ;;
     esac
     echo "stub: unexpected api path $2" >&2; exit 1 ;;
   "issue list")
@@ -12689,7 +12692,8 @@ EOF
 # build_tracker_env DIR — stubs plus the default dataset: milestones v1 (no due date, listed first
 # and numbered first on purpose) and v2 (due 2026-11-01); open issues 1,2,3,4,5,12; closed issues 20,21 (v1) and 22
 # (v2); PRs 100,101 on claude/12-*, 102 on feature/12-x, 103 on claude/4-thing, 104 on claude/20-x.
-# CLAUDE.md carries a valid Tracker section.
+# CLAUDE.md carries a valid Tracker section; ci.json holds two completed check runs (success and
+# skipped) and the work tree has no BASELINE.md.
 build_tracker_env() {
   local dir="$1"
   mkdir -p "$dir/tbin" "$dir/work/.git"
@@ -12700,6 +12704,7 @@ build_tracker_env() {
   printf '{"nameWithOwner":"o/r","url":"https://example.invalid/o/r","defaultBranchRef":{"name":"main"}}\n' > "$dir/repo.json"
   printf '[{"number":1,"title":"v1","html_url":"https://example.invalid/o/r/milestone/1","due_on":null,"state":"open"},{"number":2,"title":"v2","html_url":"https://example.invalid/o/r/milestone/2","due_on":"2026-11-01T00:00:00Z","state":"open"}]\n' > "$dir/milestones.json"
   printf '{"name":"main","commit":{"sha":"0123456789abcdef0123456789abcdef01234567"}}\n' > "$dir/branch.json"
+  printf '{"total_count":2,"check_runs":[{"id":2,"name":"test","status":"completed","conclusion":"success","html_url":"https://example.invalid/o/r/actions/runs/1/job/2"},{"id":3,"name":"deploy","status":"completed","conclusion":"skipped","html_url":"https://example.invalid/o/r/actions/runs/1/job/3"}]}\n' > "$dir/ci.json"
   tk_arr \
     "$(tk_i 1 '[]' 1)" \
     "$(tk_i 2 '["plan-proposed"]' 1 "$(tk_blocker 1 OPEN)")" \
@@ -12841,6 +12846,9 @@ result=ready"
   tk_jq "$dir" '.checkedAt' '"2026-01-02T03:04:05Z"'
   tk_jq "$dir" '.defaultBranch' '"main"'
   tk_jq "$dir" '.mainSha' '"0123456789abcdef0123456789abcdef01234567"'
+  tk_jq "$dir" '.health' '{"ci":"passing","ciUrl":"https://example.invalid/o/r/actions/runs/1/job/3","baseline":null,"baselineCurrent":null}'
+  tk_jq "$dir" '.health | keys' '["baseline","baselineCurrent","ci","ciUrl"]'
+  tk_jq "$dir" 'keys_unsorted | index("health") - index("mainSha")' 1
   tk_jq "$dir" '.truncated' false
   tk_jq "$dir" '[.issues[].number]' '[1,2,3,4,5,12,20,21,22]'
   tk_jq "$dir" '.issues[0]' '{"number":1,"title":"Issue 1","url":"https://example.invalid/o/r/issues/1","state":"unplanned","milestone":1,"pr":null,"blockedBy":[],"waiting":false}'
@@ -12941,6 +12949,151 @@ case_tracker_query_failed_issues_open() { tk_query_failed tracker-query-failed-i
 case_tracker_query_failed_issues_closed() { tk_query_failed tracker-query-failed-issues-closed issues-closed; }
 case_tracker_query_failed_prs() { tk_query_failed tracker-query-failed-prs prs; }
 case_tracker_query_failed_branch() { tk_query_failed tracker-query-failed-branch branch; }
+case_tracker_query_failed_ci() { tk_query_failed tracker-query-failed-ci ci; }
+
+# tk_baseline DIR COMMIT — the harness-shaped BASELINE.md (commit, branch, date, an indented
+# results list) in DIR/work/.claude.
+tk_baseline() {
+  mkdir -p "$1/work/.claude"
+  printf '# Verification baseline\n\n- commit: %s\n- branch: main\n- date: 2026-01-01\n- results:\n  - `bash dev/selfcheck.sh`: 10 pass, 0 fail\n  - `bash dev/hook-tests.sh`: all pass\n' "$2" > "$1/work/.claude/BASELINE.md"
+}
+
+# tk_health_ci DIR CI_JSON WANT_CI WANT_URL — rewrite ci.json, sync, pin .health.ci and .health.ciUrl.
+tk_health_ci() {
+  printf '%s\n' "$2" > "$1/ci.json"
+  run_tracker "$1"
+  expect_rc 0
+  tk_jq "$1" '[.health.ci, .health.ciUrl]' "[$3,$4]"
+}
+
+# tracker-health-ci — the roll-up: the newest run per check name decides (an older failure of a
+# since-green check is gone, whatever order the runs arrive in), failing beats pending beats
+# passing, no runs is null, only an https url is kept, the single GET names the real sha and
+# carries no write flag, and a malformed answer or a non-hex sha skips with site=ci.
+# mutant:648-ci-fail-open — turns the failed-read and malformed-answer skips into no-ops, so an
+# unreadable CI falls through to a snapshot instead of skipping.
+# mutant:648-ci-precedence — tests pending before failing, so a failed check next to a running one
+# reads pending.
+# mutant:648-ci-latest-per-name — drops the newest-run-per-name reduction, so an older failed run
+# of a check that has since passed keeps CI failing.
+case_tracker_health_ci() {
+  local dir sha u3 f p; dir="$(mk_fixture tracker-health-ci)"
+  build_tracker_env "$dir"
+  sha=0123456789abcdef0123456789abcdef01234567
+  u3='"https://example.invalid/o/r/actions/runs/1/job/3"'
+  f='{"id":5,"name":"a","status":"completed","conclusion":"failure","html_url":"https://example.invalid/f"}'
+  p='{"id":6,"name":"b","status":"in_progress","conclusion":null,"html_url":"https://example.invalid/p"}'
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.health.ci, .health.ciUrl]' "[\"passing\",$u3]"
+  expect_log_count "$dir/.gh-calls" "api repos/o/r/commits/$sha/check-runs?per_page=100" 1
+  tk_health_ci "$dir" "{\"total_count\":2,\"check_runs\":[$p,$f]}" '"failing"' '"https://example.invalid/f"'
+  tk_health_ci "$dir" '{"total_count":2,"check_runs":[{"id":1,"name":"a","status":"in_progress","conclusion":null,"html_url":"https://example.invalid/p"},{"id":2,"name":"b","status":"completed","conclusion":"success","html_url":"https://example.invalid/s"}]}' '"pending"' '"https://example.invalid/p"'
+  tk_health_ci "$dir" '{"total_count":1,"check_runs":[{"id":1,"name":"a","status":"completed","conclusion":"cancelled","html_url":"https://example.invalid/c"}]}' '"failing"' '"https://example.invalid/c"'
+  tk_health_ci "$dir" '{"total_count":1,"check_runs":[{"id":1,"name":"a","status":"completed","conclusion":"neutral","html_url":"https://example.invalid/n"}]}' '"passing"' '"https://example.invalid/n"'
+  tk_health_ci "$dir" '{"total_count":0,"check_runs":[]}' null null
+  tk_health_ci "$dir" '{"total_count":150,"check_runs":[{"id":1,"name":"a","status":"completed","conclusion":"success","html_url":"https://example.invalid/a"},{"id":2,"name":"b","status":"completed","conclusion":"success","html_url":"https://example.invalid/b"}]}' '"passing"' '"https://example.invalid/a"'
+  tk_health_ci "$dir" '{"total_count":1,"check_runs":[{"id":1,"name":"a","status":"completed","conclusion":"success","html_url":"http://example.invalid/a"}]}' '"passing"' null
+  # An older failed run and a newer successful run of one check, in either order: passing, newer url.
+  tk_health_ci "$dir" '{"total_count":2,"check_runs":[{"id":9,"name":"a","status":"completed","conclusion":"success","html_url":"https://example.invalid/new"},{"id":4,"name":"a","status":"completed","conclusion":"failure","html_url":"https://example.invalid/old"}]}' '"passing"' '"https://example.invalid/new"'
+  tk_health_ci "$dir" '{"total_count":2,"check_runs":[{"id":4,"name":"a","status":"completed","conclusion":"failure","html_url":"https://example.invalid/old"},{"id":9,"name":"a","status":"completed","conclusion":"success","html_url":"https://example.invalid/new"}]}' '"passing"' '"https://example.invalid/new"'
+  # A malformed answer is a skip with the site named, and the stale snapshot is gone.
+  printf '{"message":"x"}\n' > "$dir/ci.json"
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=query-failed site=ci')" ] || { __ok=0; __why="${__why}malformed ci: stdout $planning_out\n"; }
+  tk_no_state "$dir"
+  # A non-hex sha never reaches the API path.
+  printf '{"total_count":0,"check_runs":[]}\n' > "$dir/ci.json"
+  printf '{"name":"main","commit":{"sha":"ZZZ"}}\n' > "$dir/branch.json"
+  : > "$dir/.gh-calls"
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=query-failed site=ci')" ] || { __ok=0; __why="${__why}bad sha: stdout $planning_out\n"; }
+  expect_log_count "$dir/.gh-calls" "commits/" 0
+}
+
+# tracker-health-baseline — a harness-shaped BASELINE.md parses to {commit, date, results[]};
+# baselineCurrent is the doctor's prefix rule; the run of results ends at the first unindented
+# line; a bad date is null; CRLF parses the same; the item and length caps hold; no results line
+# is an empty list.
+# mutant:648-baseline-current — makes baselineCurrent true whatever the commit, so a baseline
+# behind main reads current.
+case_tracker_health_baseline() {
+  local dir sha i; dir="$(mk_fixture tracker-health-baseline)"
+  build_tracker_env "$dir"
+  sha=0123456789abcdef0123456789abcdef01234567
+  tk_baseline "$dir" "$sha"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.health.baseline' "{\"commit\":\"$sha\",\"date\":\"2026-01-01\",\"results\":[{\"command\":\"bash dev/selfcheck.sh\",\"detail\":\"10 pass, 0 fail\"},{\"command\":\"bash dev/hook-tests.sh\",\"detail\":\"all pass\"}]}"
+  tk_jq "$dir" '.health.baselineCurrent' true
+  tk_baseline "$dir" fedcba9876543210fedcba9876543210fedcba98
+  run_tracker "$dir"
+  tk_jq "$dir" '.health.baselineCurrent' false
+  tk_baseline "$dir" 0123456
+  run_tracker "$dir"
+  tk_jq "$dir" '.health.baselineCurrent' true
+  printf '%s\n' '- commit: 0123456789abcdef' '- date: yesterday' '- results:' '  - `a b`: ok' '  free text without backticks' '    - `c`:   spaced out  ' '- note: after the list' '  - `late`: not collected' > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.health.baseline' '{"commit":"0123456789abcdef","date":null,"results":[{"command":"a b","detail":"ok"},{"command":"c","detail":"spaced out"}]}'
+  printf -- '- commit: %s\r\n- date: 2026-02-03\r\n- results:\r\n  - `x`: y\r\n' "$sha" > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  tk_jq "$dir" '.health.baseline' "{\"commit\":\"$sha\",\"date\":\"2026-02-03\",\"results\":[{\"command\":\"x\",\"detail\":\"y\"}]}"
+  {
+    printf -- '- commit: %s\n- results:\n' "$sha"
+    i=0
+    while [ "$i" -lt 60 ]; do printf '  - `c%s`: ok\n' "$i"; i=$((i + 1)); done
+  } > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  tk_jq "$dir" '.health.baseline.results | length' 50
+  tk_jq "$dir" '.health.baseline.results[0]' '{"command":"c0","detail":"ok"}'
+  printf -- '- commit: %s\n- date: 2026-01-01\n- branch: main\n' "$sha" > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  tk_jq "$dir" '.health.baseline' "{\"commit\":\"$sha\",\"date\":\"2026-01-01\",\"results\":[]}"
+  {
+    printf -- '- commit: %s\n- results:\n' "$sha"
+    printf '  - `long`: %s\n' "$(awk 'BEGIN { for (i = 0; i < 300; i++) printf "d" }')"
+  } > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  tk_jq "$dir" '.health.baseline.results[0].detail | length' 200
+}
+
+# tracker-health-baseline-null — every way the baseline can be unusable is a null baseline and a
+# ready sync, never a skip: no file, a directory, no commit line, a non-hex commit, a file over the
+# byte cap.
+# mutant:648-baseline-cap — disables the byte cap, so an oversized file is parsed instead of read
+# as null.
+case_tracker_health_baseline_null() {
+  local dir sha; dir="$(mk_fixture tracker-health-baseline-null)"
+  build_tracker_env "$dir"
+  sha=0123456789abcdef0123456789abcdef01234567
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.health.baseline, .health.baselineCurrent]' '[null,null]'
+  mkdir -p "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.health.baseline, .health.baselineCurrent]' '[null,null]'
+  rmdir "$dir/work/.claude/BASELINE.md"
+  printf -- '- branch: main\n- date: 2026-01-01\n' > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.health.baseline, .health.baselineCurrent]' '[null,null]'
+  printf -- '- commit: xyz123456\n' > "$dir/work/.claude/BASELINE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.health.baseline, .health.baselineCurrent]' '[null,null]'
+  {
+    printf -- '- commit: %s\n- results:\n' "$sha"
+    awk 'BEGIN { for (i = 0; i < 3000; i++) printf "  - `c%d`: padding padding padding padding\n", i }'
+  } > "$dir/work/.claude/BASELINE.md"
+  [ "$(wc -c < "$dir/work/.claude/BASELINE.md" | tr -d ' ')" -gt 65536 ] || { __ok=0; __why="${__why}fixture is not over the cap\n"; }
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.health.baseline, .health.baselineCurrent]' '[null,null]'
+}
 
 # tracker-too-large — about 1.2 MB of snapshot: skip with the byte count, exit 1, no state.json
 # (a stale one included). Killed by 622-size-cap.
@@ -13005,12 +13158,13 @@ case_tracker_never_writes() {
     floor_write_script "$dir" "$dir/tbin/$t" 'printf "%s\n" "${0##*/} $*" >> "__DIR__/.trap-calls"
 exit 1'
   done
-  before="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md")"
+  tk_baseline "$dir" 0123456789abcdef0123456789abcdef01234567
+  before="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md" "$dir/work/.claude/BASELINE.md")"
   run_tracker "$dir"
   expect_rc 0
   run_tracker "$dir" page
   expect_rc 0
-  after="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md")"
+  after="$(find "$dir/work" -path "$dir/work/.git/trail-blazer" -prune -o -print | sort; cksum "$dir/work/CLAUDE.md" "$dir/work/.claude/BASELINE.md")"
   [ "$before" = "$after" ] || { __ok=0; __why="${__why}the working tree changed\n"; }
   expect_no_log "$dir/.trap-calls"
   bad=""
@@ -13402,6 +13556,10 @@ cases=(
   "tracker-query-failed-issues-closed|case_tracker_query_failed_issues_closed|#622: a failing closed-issue list skips, removes the stale state.json"
   "tracker-query-failed-prs|case_tracker_query_failed_prs|#622: a failing PR list skips, removes the stale state.json"
   "tracker-query-failed-branch|case_tracker_query_failed_branch|#622: a failing default-branch read skips, removes the stale state.json"
+  "tracker-query-failed-ci|case_tracker_query_failed_ci|#648: a failing check-runs read skips with site=ci, removes the stale state.json"
+  "tracker-health-ci|case_tracker_health_ci|#648: the CI roll-up takes the newest run per check name, failing over pending over passing, null with no runs; one GET of the real sha; a bad answer or sha skips with site=ci"
+  "tracker-health-baseline|case_tracker_health_baseline|#648: a harness-shaped BASELINE.md parses to commit, date and results; baselineCurrent follows the commit prefix; bounds and soft failures hold"
+  "tracker-health-baseline-null|case_tracker_health_baseline_null|#648: a missing, non-file, oversized or unparseable BASELINE.md gives a null baseline and a ready sync"
   "tracker-too-large|case_tracker_too_large|#622: a snapshot over the byte cap skips with the byte count and leaves no state.json"
   "tracker-truncated|case_tracker_truncated|#622: reaching the open-issue or per-milestone closed-issue limit sets truncated"
   "tracker-never-writes|case_tracker_never_writes|#622: only read gh calls, no booby-trapped write command fires, the working tree is byte-identical"

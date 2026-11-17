@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 #
 # tracker-sync.sh — the read-only, mechanical half of the opt-in live tracker (#622). It projects
-# this repo's live GitHub state into ONE snapshot document (JSON) and writes it to a file; the
+# this repo's live GitHub state (and its local verification baseline file) into ONE snapshot
+# document (JSON) and writes it to a file; the
 # `tracker` skill — the only place the Artifact/ArtifactData tools exist — pushes that file to the
 # tracker's database. This script never calls an artifact tool and never writes to GitHub.
 #
@@ -24,7 +25,7 @@
 #   malformed:   tracker=malformed, then reason=<no-fence|no-url|multiple-urls|bad-url|unknown-key>
 #                (exit 1; no gh call, nothing written)
 #   skip:        result=skip, then reason=query-failed site=<repo|milestones|issues-open|
-#                issues-closed|prs|branch> | reason=too-large bytes=<n> | reason=build-failed
+#                issues-closed|prs|branch|ci> | reason=too-large bytes=<n> | reason=build-failed
 #                (exit 1; no state.json is left behind — a stale one from an earlier run is removed)
 #   ready (exit 0), in this order: tracker=present, url=<url>, dir=<dir>, file=<dir>/state.json,
 #                collection=harness, doc=state, issues=<n>, milestones=<m>, truncated=<true|false>,
@@ -41,7 +42,7 @@
 # truth and the snapshot is a projection.
 #
 # SNAPSHOT (state.json, compact JSON, schema 1): schema, repo, repoUrl, checkedAt, defaultBranch,
-# mainSha, truncated, milestones[] {number,title,url,dueOn,open,closed}, issues[] {number,title,
+# mainSha, health {ci,ciUrl,baseline,baselineCurrent}, truncated, milestones[] {number,title,url,dueOn,open,closed}, issues[] {number,title,
 # url,state,milestone,pr,blockedBy[],waiting}, counts. Scope: the open and closed issues of the
 # open milestones (only the first 100 open milestones are read), plus every other open issue. An
 # open issue with no milestone, or whose milestone is closed or not read, is listed with milestone
@@ -51,6 +52,19 @@
 # A PR is linked only from a claude/<n>-... head branch (the newest one wins; only the newest 200 PRs are read, and
 # that limit does not set truncated). blockedBy comes
 # from GitHub's native issue dependencies only; waiting is true iff any blocker is open.
+#
+# HEALTH: ci is passing|failing|pending|null from ONE GET of the check runs on mainSha (hex-checked
+# before it enters the path; only the first 100 runs GitHub returns are read; legacy commit
+# statuses are not). The newest run per check name counts (highest id), then first match wins:
+# failing (completed with a conclusion other than success, neutral or skipped), pending (not
+# completed), else passing; null when no run came back. ciUrl is the https html_url of the first
+# run of that class by [name, id], else null. A failed or malformed CI read is a skip with site=ci.
+# baseline is read from BASELINE.md in the working tree's .claude directory and never written:
+# {commit, date, results[] {command, detail}} from the first `- commit:` (7-40 lowercase hex), the
+# `- date:` (YYYY-MM-DD, else null) and the indented "- `<command>`: <detail>" lines under
+# `- results:` (at most 50, each string cut to 200). A missing, over-64KiB or unparseable file is
+# baseline null, never a skip. baselineCurrent is mainSha starting with baseline.commit, or null
+# without a baseline.
 
 set -uo pipefail
 
@@ -61,6 +75,8 @@ LBL_BLOCKED="impl-blocked"
 LBL_NEEDS_HUMAN="needs-human"
 LBL_NO_PLAN="no-plan"
 MAX_BYTES=1000000
+BASELINE_MAX_BYTES=65536
+CI_PER_PAGE=100
 OPEN_LIMIT=1000
 CLOSED_LIMIT=500
 PR_LIMIT=200
@@ -275,6 +291,77 @@ printf '%s\n' "$out" > "$work/branch.json"
 main_sha="$(jq -r '.commit.sha // empty' "$work/branch.json" 2>/dev/null)"
 [ -n "$main_sha" ] || q_fail branch
 
+# --- health: CI on the default branch, and the local verification baseline (#648) --------------
+# CI: one GET of the check runs on main's commit; a failed or malformed answer fails closed.
+case "$main_sha" in
+  ""|*[!0-9a-f]*) q_fail ci ;;
+esac
+if ! out="$(gh api "repos/$nwo/commits/$main_sha/check-runs?per_page=$CI_PER_PAGE" 2>/dev/null)"; then q_fail ci; fi
+printf '%s\n' "$out" > "$work/ci.json"
+jq -e 'type == "object" and ((.check_runs | type) == "array") and ((.total_count | type) == "number")' \
+  "$work/ci.json" >/dev/null 2>&1 || q_fail ci
+
+# Baseline: only the fields the harness writes, from this checkout's working tree. It never skips
+# the sync: a missing, oversized or unparseable file is a null baseline.
+bl="$top/.claude/BASELINE.md"
+printf 'null\n' > "$work/baseline.json"
+if [ -f "$bl" ]; then
+  bl_bytes="$(wc -c < "$bl" 2>/dev/null | tr -d '[:space:]')"
+  if [ -n "$bl_bytes" ] && [ "$bl_bytes" -le "$BASELINE_MAX_BYTES" ]; then
+    if jq -R -s -c '
+      def trim: sub("^[ \t]+"; "") | sub("[ \t]+$"; "");
+      (split("\n") | map(sub("\r$"; ""))) as $L
+      | ([$L[] | select(test("^- commit:"))] | .[0]) as $cl
+      | if $cl == null then null
+        else
+          ($cl | sub("^- commit:"; "") | trim) as $commit
+          | if ($commit | test("^[0-9a-f]{7,40}$")) | not then null
+            else
+              ([$L[] | select(test("^- date:"))] | .[0]) as $dl
+              | (if $dl == null then null else ($dl | sub("^- date:"; "") | trim) end) as $d
+              | ([range(0; $L | length)] | map(select($L[.] | test("^- results:[ \t]*$"))) | .[0]) as $ri
+              | {commit: $commit,
+                 date: (if $d != null and ($d | test("^[0-9]{4}-[0-9]{2}-[0-9]{2}$")) then $d else null end),
+                 results: (if $ri == null then []
+                   else
+                     ($L[$ri + 1:] | (map(test("^[ \t]")) | index(false)) as $e | if $e == null then . else .[:$e] end)
+                     | map(capture("^[ \t]+-[ \t]+`(?<c>[^`]+)`:[ \t]*(?<d>.*)$")?)
+                     | .[0:50]
+                     | map({command: (.c | .[0:200]), detail: (.d | trim | .[0:200])})
+                   end)}
+            end
+        end' "$bl" > "$work/baseline.tmp" 2>/dev/null; then
+      mv "$work/baseline.tmp" "$work/baseline.json" || printf 'null\n' > "$work/baseline.json"
+    fi
+  fi
+fi
+
+# Health: the latest run per check name decides CI (never response order); a check whose newest
+# run is outside the first CI_PER_PAGE returned is not seen.
+jq -n -c \
+  --slurpfile ci "$work/ci.json" \
+  --slurpfile bl "$work/baseline.json" \
+  --arg sha "$main_sha" '
+  def cls:
+    if .status != "completed" then "pending"
+    elif (.conclusion as $k | ["success", "neutral", "skipped"] | index($k)) != null then "passing"
+    else "failing" end;
+  ($bl[0]) as $b
+  | ([$ci[0].check_runs[] | select(type == "object")]
+      | group_by(.name // "")
+      | map(max_by(.id // 0) | . + {_c: cls})
+      | sort_by([(.name // ""), (.id // 0)])) as $r
+  | (if ($r | length) == 0 then null
+     elif any($r[]; ._c == "failing") then "failing"
+     elif any($r[]; ._c == "pending") then "pending"
+     else "passing" end) as $c
+  | ($r | map(select(._c == $c)) | .[0].html_url // null) as $u
+  | {ci: $c,
+     ciUrl: (if ($u | type) == "string" and ($u | startswith("https://")) then $u else null end),
+     baseline: $b,
+     baselineCurrent: (if $b == null then null else ($sha | startswith($b.commit)) end)}' \
+  > "$work/health.json" || skip "build-failed"
+
 checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
 jq -n -c \
@@ -283,6 +370,7 @@ jq -n -c \
   --slurpfile open "$work/open.json" \
   --slurpfile closed "$work/closed.json" \
   --slurpfile prs "$work/prs.json" \
+  --slurpfile health "$work/health.json" \
   --arg nwo "$nwo" --arg branch "$default_branch" --arg sha "$main_sha" --arg at "$checked_at" \
   --argjson trunc "$trunc_shell" \
   --arg l_prop "$LBL_PROPOSED" --arg l_appr "$LBL_APPROVED" --arg l_pro "$LBL_PR_OPEN" \
@@ -330,6 +418,7 @@ jq -n -c \
       checkedAt: $at,
       defaultBranch: $branch,
       mainSha: $sha,
+      health: $health[0],
       truncated: ($trunc or any($all[]; ._more)),
       milestones: ([$mraw[]
         | .number as $n

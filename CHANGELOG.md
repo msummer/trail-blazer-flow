@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #648: the tracker shows CI on the default branch and the verification baseline (its date, its
+  commit and whether it trails main); a failed CI read skips the sync with `site=ci`. Re-publish an
+  existing tracker's page (`tracker-sync.sh page`, then the skill's Create publish step) to see it.
 - #635: full auto fixes forward one red default branch per run (files, plans, approves and merges
   a fix issue under every floor); an optional "Post-merge CI" section (item 13) makes each merge
   wait for its push CI. Consumer step: add `Bash(gh run list:*)` (re-copy the permissions block).

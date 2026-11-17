@@ -201,6 +201,47 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     return box;
   }
 
+  function healthStrip(hl) {
+    if (!hl || typeof hl !== "object") { return null; }
+    var box = el("div");
+    var meta = el("div", "meta");
+    var ci = hl.ci;
+    var label = ci === "passing" ? "CI passing" : ci === "failing" ? "CI failing" : ci === "pending" ? "CI pending" : "CI: no checks";
+    var chip = el("span", "badge", label);
+    chip.setAttribute("data-s", ci === "passing" ? "done" : ci === "failing" ? "blocked" : ci === "pending" ? "waiting" : "other");
+    var href = safeHref(hl.ciUrl);
+    if (href) {
+      var a = el("a");
+      a.setAttribute("href", href);
+      a.setAttribute("target", "_blank");
+      a.setAttribute("rel", "noopener noreferrer");
+      a.appendChild(chip);
+      meta.appendChild(a);
+    } else {
+      meta.appendChild(chip);
+    }
+    var b = hl.baseline;
+    if (b && typeof b === "object") {
+      var bs = el("span", null, "baseline " + String(b.date || "undated") + " at " + String(b.commit || "").slice(0, 7));
+      if (hl.baselineCurrent === false) {
+        bs.appendChild(document.createTextNode(" "));
+        bs.appendChild(el("span", "stale", "baseline behind main"));
+      }
+      meta.appendChild(bs);
+    } else {
+      meta.appendChild(el("span", "muted", "no baseline recorded on the syncing machine"));
+    }
+    box.appendChild(meta);
+    if (b && typeof b === "object" && Array.isArray(b.results) && b.results.length) {
+      var rm = el("div", "meta");
+      b.results.forEach(function (r) {
+        if (r && typeof r === "object") { rm.appendChild(el("span", null, String(r.command || "") + ": " + String(r.detail || ""))); }
+      });
+      box.appendChild(rm);
+    }
+    return box;
+  }
+
   function peopleBlock() {
     var items = model.people.slice().sort(function (a, b) {
       return (a.data.state === "done" ? 1 : 0) - (b.data.state === "done" ? 1 : 0);
@@ -392,6 +433,8 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
       return;
     }
     app.appendChild(header(h));
+    var hs = healthStrip(h.health);
+    if (hs) { app.appendChild(hs); }
     var people = peopleBlock();
     if (people) { app.appendChild(people); }
     var issues = h.issues || [];

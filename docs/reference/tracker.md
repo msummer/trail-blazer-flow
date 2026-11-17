@@ -13,7 +13,8 @@ comment, and each row links to its issue, where you comment directly.
 Three parts:
 
 - `bin/tracker-sync.sh` — read-only and mechanical. It reads the repo's "Tracker" section, queries
-  `gh`, and writes one snapshot file. It never calls an artifact tool.
+  `gh`, reads the checkout's local verification baseline file, and writes one snapshot file. It
+  never calls an artifact tool.
 - `skills/tracker/SKILL.md` — the procedures (Create, Sync, People read-back, Hand-written update).
   Only the orchestrating session can run them: the `Artifact` and `ArtifactData` tools exist
   nowhere else.
@@ -55,7 +56,7 @@ Sync prints, one `key=value` per line:
 | no section | `tracker=absent` (no `gh` call, nothing written) |
 | malformed | `tracker=malformed`, `reason=<token>` (exit 1, no `gh` call) |
 | ready | `tracker=present`, `url=`, `dir=`, `file=<dir>/state.json`, `collection=harness`, `doc=state`, `issues=<n>`, `milestones=<m>`, `truncated=<true\|false>`, `checked=<checkedAt>`, `result=ready` |
-| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|prs\|branch>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
+| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|prs\|branch\|ci>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
 
 Every `gh` call is a read (`repo view`, `issue list`, `pr list`, GET `api`), and none is retried:
 any failure fails closed, removes `state.json` (a stale one from an earlier run included) and
@@ -71,7 +72,10 @@ to `<dir>/index.html` and prints `tracker=<absent|present|malformed>` (plus `url
 One document, `harness/state`, written only by Sync as a full `set`:
 
 ```
-{schema:1, repo, repoUrl, checkedAt, defaultBranch, mainSha, truncated,
+{schema:1, repo, repoUrl, checkedAt, defaultBranch, mainSha,
+ health:{ci:"passing"|"failing"|"pending"|null, ciUrl:<https url>|null,
+         baseline:{commit,date|null,results:[{command,detail}]}|null, baselineCurrent:bool|null},
+ truncated,
  milestones:[{number,title,url,dueOn|null,open,closed}],
  issues:[{number,title,url,state,milestone:<number>|null,
           pr:{number,url,state}|null, blockedBy:[{number,url,open}], waiting}],
@@ -100,9 +104,28 @@ issue, means a sync carries a single `if_version` (the database refuses a write 
 document without one), needs no chunking and no deletes for issues that leave scope, and updates
 the page atomically.
 
+`health` is the page's strip under the header. `ci` comes from one GET of the check runs on
+`mainSha` (checked as lowercase hex before it enters the API path). Only the newest run of each
+check name counts. Then, first match wins: `failing` if any is completed with a conclusion other
+than `success`, `neutral` or `skipped`; `pending` if any is not completed; otherwise `passing`; `null`
+when no run came back. `ciUrl` is the `https` link of the first run of the deciding class, by
+name then id. A failed or malformed CI read is a skip with `site=ci`, like every other query.
+`baseline` is read from the working tree's `.claude/BASELINE.md` (the file the harness writes),
+never written: the first `- commit:` (7 to 40 lowercase hex), the `- date:` (`YYYY-MM-DD`, else
+`null`) and the indented ``- `<command>`: <detail>`` lines directly under `- results:`, at most 50,
+each string cut to 200 characters. A missing file, a non-file, one over 65,536 bytes, or one with
+no valid commit is `baseline: null` and never a skip. `baselineCurrent` is true iff `mainSha`
+starts with the baseline commit, and `null` without a baseline; the page shows "baseline behind
+main" only when it is `false`.
+
 Honest limits: PR links come from the newest 200 PRs only, so an older issue's PR may show no link
 (this does not set `truncated`). `truncated` is true when the open list reaches 1,000 issues, a milestone's closed
 list reaches 500, or a dependency list is longer than GitHub returned.
+CI reads check runs only (a CI that reports only legacy commit statuses shows "no checks"), and only
+the first 100 runs GitHub returns, so a check whose newest run is not among them is not shown; a
+token without checks read access makes every sync skip with `site=ci`. The baseline belongs to the
+machine that syncs: another checkout's baseline is not seen, and a missing file shows "no baseline".
+Baseline command names and outcomes are stored in the artifact too.
 Issue titles, PR links and people notes of a private repo are stored in the artifact: it is
 created private, and sharing it exposes them to the people you share with. Only owners and editors
 can write to its database (the `admin` write rule); collaborators who cannot edit see the page but
