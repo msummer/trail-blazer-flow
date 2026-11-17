@@ -646,7 +646,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.6.0)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.7.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -760,6 +760,11 @@ commit.
 **v3.5.0 → v3.6.0** — re-copy the permissions block from `templates/repo-settings.json` or add
 `"Bash(tracker-sync.sh:*)"` and `"Bash(changelog-merge.sh:*)"` by hand. On Codex, also re-run
 `bin/codex-setup.sh`.
+
+**v3.6.0 → v3.7.0** — re-copy the permissions block from `templates/repo-settings.json` or add
+`"Bash(gh run list:*)"` by hand. To see the tracker's new blocks, re-publish an existing tracker
+page from the checkout that created it: run `tracker-sync.sh page` and publish the printed `page=`
+file to the tracker's URL.
 
 </details>
 
