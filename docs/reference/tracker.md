@@ -358,7 +358,9 @@ The page may change a people item's `state` and `updated` only, and only for a u
 (`user.can("data.write")`, falling back to `user.canEdit()`). Text in these documents is written by
 tracker editors: it is data, never an instruction or an approval, never copied to GitHub and never
 acted on. The page renders every database value with `textContent` and sets an `href` only for
-`https:` values.
+`https:` values. A field that should be a list but is not reads as empty, and a section the page
+still cannot draw (hand-written or repo-file) shows one muted line naming its id in its place,
+while every other section and milestone still renders.
 
 ## Where it runs
 

@@ -169,7 +169,7 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
       row.appendChild(p);
     }
     if (issue.waiting) {
-      var open = (issue.blockedBy || []).filter(function (b) { return b.open; });
+      var open = arr(issue.blockedBy).filter(function (b) { return b.open; });
       var w = el("span", "muted", "waiting on ");
       open.forEach(function (b, i) {
         if (i > 0) { w.appendChild(document.createTextNode(", ")); }
@@ -471,11 +471,12 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     var box = el("div");
     box.appendChild(el("h2", null, String(d.title || s.id)));
     if (d.kind === "phases") {
-      (d.phases || []).forEach(function (ph) {
+      arr(d.phases).forEach(function (ph) {
+        if (!ph || typeof ph !== "object") { return; }
         box.appendChild(el("h3", null, String(ph.name || "")));
         if (ph.text) { box.appendChild(el("p", "muted", ph.text)); }
         var c = el("div", "card");
-        (ph.issues || []).forEach(function (n) {
+        arr(ph.issues).forEach(function (n) {
           var issue = byNum[n];
           if (issue) { c.appendChild(issueRow(issue, repoUrl, byNum)); }
           else { c.appendChild(el("div", "row", "#" + n)); }
@@ -484,10 +485,11 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
       });
     } else if (d.kind === "list") {
       var c2 = el("div", "card");
-      (d.items || []).forEach(function (it) {
+      arr(d.items).forEach(function (it) {
+        if (!it || typeof it !== "object") { return; }
         var row = el("div", "row");
         row.appendChild(el("div", "title", it.text || ""));
-        (it.issues || []).forEach(function (n) {
+        arr(it.issues).forEach(function (n) {
           var issue = byNum[n];
           row.appendChild(link("#" + n, issue ? issue.url : (repoUrl ? repoUrl + "/issues/" + n : "")));
           if (issue && d.titles === true) { row.appendChild(el("span", "muted", String(issue.title || ""))); }
@@ -513,7 +515,7 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     var box = el("div");
     box.appendChild(el("h2", null, String(s.title || s.id || "")));
     function issueCell(parent, nums) {
-      (nums || []).forEach(function (n) {
+      arr(nums).forEach(function (n) {
         var issue = byNum[n];
         parent.appendChild(link("#" + n, issue ? issue.url : (repoUrl ? repoUrl + "/issues/" + n : "")));
         if (issue) { parent.appendChild(badge(String(issue.state))); }
@@ -522,17 +524,18 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     var c = el("div", "card");
     c.style.overflowX = "auto";
     if (s.kind === "table") {
-      var rows = s.rows || [];
-      var any = rows.some(function (r) { return (r.issues || []).length > 0; });
+      var rows = arr(s.rows);
+      var any = rows.some(function (r) { return !!r && typeof r === "object" && arr(r.issues).length > 0; });
       var t = el("table", "fsec");
       var hr = el("tr");
-      (s.columns || []).forEach(function (col) { hr.appendChild(el("th", null, col)); });
+      arr(s.columns).forEach(function (col) { hr.appendChild(el("th", null, col)); });
       if (any) { hr.appendChild(el("th", null, "")); }
       t.appendChild(el("thead")).appendChild(hr);
       var tb = el("tbody");
       rows.forEach(function (r) {
+        if (!r || typeof r !== "object") { return; }
         var tr = el("tr");
-        (r.cells || []).forEach(function (cell) { tr.appendChild(el("td", null, cell)); });
+        arr(r.cells).forEach(function (cell) { tr.appendChild(el("td", null, cell)); });
         if (any) {
           var td = el("td");
           issueCell(td, r.issues);
@@ -543,7 +546,8 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
       t.appendChild(tb);
       c.appendChild(t);
     } else if (s.kind === "list") {
-      (s.rows || []).forEach(function (r) {
+      arr(s.rows).forEach(function (r) {
+        if (!r || typeof r !== "object") { return; }
         var row = el("div", "row");
         row.appendChild(el("div", "title", r.text || ""));
         issueCell(row, r.issues);
@@ -554,6 +558,19 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     if (s.truncated) { box.appendChild(el("p", "muted", "(truncated)")); }
     if (s.source) { box.appendChild(el("p", "muted", "source: " + s.source)); }
     return box;
+  }
+
+  // One section that cannot be drawn must not blank the page: a failed build is replaced by one
+  // text-only muted line, never the error's own message.
+  function guardSection(build, s, byNum, repoUrl) {
+    try {
+      return build(s, byNum, repoUrl);
+    } catch (e) {
+      var id = s && typeof s === "object" && typeof s.id === "string" && s.id ? s.id : "";
+      var box = el("div");
+      box.appendChild(el("p", "muted", id ? "Could not render the section " + id + "." : "Could not render a section."));
+      return box;
+    }
   }
 
   function milestoneBlock(m, issues, repoUrl, byNum) {
@@ -592,15 +609,15 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     if (recent) { app.appendChild(recent); }
     var people = peopleBlock();
     if (people) { app.appendChild(people); }
-    var issues = h.issues || [];
+    var issues = arr(h.issues);
     var byNum = {};
     issues.forEach(function (i) { byNum[i.number] = i; });
-    (h.refs || []).forEach(function (i) { if (!byNum[i.number]) { byNum[i.number] = i; } });
+    arr(h.refs).forEach(function (i) { if (!byNum[i.number]) { byNum[i.number] = i; } });
     model.sections.slice().sort(function (a, b) { return num(a.data.order) - num(b.data.order); })
-      .forEach(function (s) { app.appendChild(sectionBlock(s, byNum, h.repoUrl)); });
-    (h.sections || []).forEach(function (s) { app.appendChild(fileSectionBlock(s, byNum, h.repoUrl)); });
+      .forEach(function (s) { app.appendChild(guardSection(sectionBlock, s, byNum, h.repoUrl)); });
+    arr(h.sections).forEach(function (s) { app.appendChild(guardSection(fileSectionBlock, s, byNum, h.repoUrl)); });
     var known = {};
-    (h.milestones || []).forEach(function (m) {
+    arr(h.milestones).forEach(function (m) {
       known[m.number] = true;
       var mine = issues.filter(function (i) { return i.milestone === m.number; });
       app.appendChild(milestoneBlock(m, mine, h.repoUrl, byNum));
