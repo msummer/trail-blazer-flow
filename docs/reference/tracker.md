@@ -23,22 +23,31 @@ Three parts:
 
 ## The "Tracker" section (CLAUDE.md contract item 11)
 
-A heading titled exactly "Tracker" (any `#` depth) whose first fenced block holds one line:
+A heading titled exactly "Tracker" (any `#` depth) whose first fenced block holds the `url:` line
+and, optionally, `section:` lines:
 
 ````markdown
 ## Tracker
 
 ```
 url: https://<the artifact's address>
+section: milestones docs/roadmap.md#Milestones
 ```
 ````
 
 Blank lines and `#` comment lines inside the fence are skipped; any other line is an unknown key.
-The value must start `https://` and hold no whitespace, control character, quote, angle bracket or
-backtick. No heading, or no `CLAUDE.md`, means the repo has no tracker. A malformed section makes
-each sync print `tracker=malformed` and `reason=<token>` (`no-fence`, `no-url`, `multiple-urls`,
-`bad-url`, `unknown-key`, checked in the order `unknown-key`, `no-url`/`multiple-urls`, `bad-url`)
-and skip. The section is read from the working tree. The doctor does not validate it. The section
+
+| Key | Times | Value |
+|---|---|---|
+| `url:` | exactly once | starts `https://` and holds no whitespace, control character, quote, angle bracket or backtick (`bad-url` otherwise) |
+| `section:` | 0 to 8 | `<id> <path>#<heading>` (`bad-section` otherwise): an id of 1-40 characters from `a-z0-9-`, starting with `a-z0-9` and unique; whitespace; a repo-relative path of 1-200 characters from `A-Za-z0-9._/-` ending in `.md` (a last segment of exactly `.md` is rejected), with no leading or trailing `/` and no empty, `.` or `..` segment; `#`; and the exact heading text, trimmed, 1-120 characters, with no control character and not starting with `#` |
+
+No heading, or no `CLAUDE.md`, means the repo has no tracker. A malformed section makes each sync
+print `tracker=malformed` and `reason=<token>` (`no-fence`, `unknown-key`, `no-url`,
+`multiple-urls`, `bad-url`, `bad-section`, checked in the order `unknown-key`,
+`no-url`/`multiple-urls`, `bad-url`, `bad-section`) and skip. The section is read from the working
+tree; a `section:` file is read from the default branch at the snapshot's `mainSha`, never from the
+working tree (see "Repo-file sections"). The doctor does not validate it. The section
 is committed, so a wrong URL is a reviewed change; a URL copied from another repo's tracker would
 be overwritten by this repo's snapshot, and the page's `repo` field makes that visible.
 
@@ -55,8 +64,8 @@ Sync prints, one `key=value` per line:
 |---|---|
 | no section | `tracker=absent` (no `gh` call, nothing written) |
 | malformed | `tracker=malformed`, `reason=<token>` (exit 1, no `gh` call) |
-| ready | `tracker=present`, `url=`, `dir=`, `file=<dir>/state.json`, `collection=harness`, `doc=state`, `issues=<n>`, `milestones=<m>`, `truncated=<true\|false>`, `checked=<checkedAt>`, `result=ready` |
-| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|prs\|branch\|ci>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
+| ready | `tracker=present`, `url=`, `dir=`, `file=<dir>/state.json`, `collection=harness`, `doc=state`, `issues=<n>`, `milestones=<m>`, `truncated=<true\|false>`, `checked=<checkedAt>`, then one `warn=<token> section=<id>` line per dropped section (tokens `section-missing`, `section-too-large`, `section-no-heading`, `section-empty`, in declaration order), then `result=ready` |
+| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|prs\|branch\|ci\|tree\|section\|issues-refs>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
 
 Every `gh` call is a read (`repo view`, `issue list`, `pr list`, GET `api`), and none is retried:
 any failure fails closed, removes `state.json` (a stale one from an earlier run included) and
@@ -79,14 +88,22 @@ One document, `harness/state`, written only by Sync as a full `set`:
  milestones:[{number,title,url,dueOn|null,open,closed}],
  issues:[{number,title,url,state,milestone:<number>|null,
           pr:{number,url,state}|null, blockedBy:[{number,url,open}], waiting}],
- counts:{<state>:n..., total, waiting}}
+ counts:{<state>:n..., total, waiting},
+ sections:[{id,title,kind:"table",source,columns:[..],rows:[{cells:[..],issues:[n..]}],truncated}
+          |{id,title,kind:"list",source,rows:[{text,issues:[n..]}],truncated}],
+ refs:[{number,title,url,state}]}
 ```
+
+`sections` and `refs` are always present, and empty when the "Tracker" section declares no
+`section:`.
 
 Issues are sorted by number, milestones by due date (none last), then number. Scope: the open and
 closed issues of the open milestones (only the first 100 open milestones are read), plus every
 other open issue. An open issue with no milestone, or whose milestone is closed or not read, is
 listed with `milestone` null and shown under "No milestone". A milestone's `open` and
-`closed` count the issues listed. `state`, first match wins:
+`closed` count the issues listed. `refs` holds the closed issues that a section row references by
+`#<n>` and `issues` does not hold (see "Repo-file sections"); it never changes `issues`, `counts` or
+a milestone's counts. `state`, first match wins:
 
 1. closed with reason `NOT_PLANNED` → `not-planned`; any other closed issue → `done`
 2. label `needs-human` → `needs-human`
@@ -126,12 +143,55 @@ the first 100 runs GitHub returns, so a check whose newest run is not among them
 token without checks read access makes every sync skip with `site=ci`. The baseline belongs to the
 machine that syncs: another checkout's baseline is not seen, and a missing file shows "no baseline".
 Baseline command names and outcomes are stored in the artifact too.
-Issue titles, PR links and people notes of a private repo are stored in the artifact: it is
-created private, and sharing it exposes them to the people you share with. Only owners and editors
+Issue titles, PR links, people notes and the content of every declared repo-file section of a
+private repo are stored in the artifact: it is created private, and sharing it exposes them to the people you share with. Only owners and editors
 can write to its database (the `admin` write rule); collaborators who cannot edit see the page but
 get a refusal when they try. A page-template upgrade is not pushed to an existing tracker: it is
 re-published by hand from the same checkout, because "re-publishing the same file path updates the
 same URL" and the page path is per checkout.
+
+## Repo-file sections
+
+Each `section:` line projects one table or list from a committed Markdown file onto the page. On
+every sync the script reads the file from the default branch at the snapshot's commit, through GET
+`git/trees/<tree sha>?recursive=1` and then GET `git/blobs/<sha>` for each declared section; the
+working tree is never read for it, and a declared path is only compared as data against GitHub's
+tree listing — it is never put in a URL or a command. A tree entry counts only when it is a regular
+file (mode `100644` or `100755`): a symlink, a submodule or a directory reads as missing.
+
+The extractor finds the first ATX heading (`#` to `######`) whose text equals the declared heading
+exactly, outside fenced code blocks, and takes the first GFM table (a header row followed by a
+delimiter row) or the first list under it, up to the next heading of the same or a shallower depth.
+A table's cells are split on `|` (`\|` is a literal pipe) and each body row is padded or cut to
+the header's width. A list's items are the top-level items; continuation lines and nested items are
+folded into their parent's text with one space, and a line at the list's own indent that is not an
+item ends it. Limits: 50 rows per section, 8 columns, 200 characters per cell or item, 262,144
+bytes per file, 8 sections. A cut sets that section's `truncated`; it never sets the snapshot's.
+
+A `#<n>` in a row counts as a reference unless it follows a letter, digit, `_`, `&`, `/` or `#`, or
+is followed by a letter, digit or `_`; at most 10 per row, and a number is at least 1. A referenced
+issue that `issues` already holds shows its state from there. For the others, one
+`issue list --state closed --limit 500` read (made only when at least one such reference exists,
+for the 50 lowest numbers) fills `refs`; a reference that is not among the newest 500 closed issues
+stays a bare link.
+
+A section that cannot be projected prints one `warn=<token> section=<id>` line and is left out; the
+sync still succeeds. `section-missing`: the path is not a regular file in the tree.
+`section-too-large`: the file is over 262,144 bytes (no blob is read). `section-no-heading`: no such
+heading outside a fence. `section-empty`: the heading has no table or list under it. A failed query
+is never a warning: it skips the sync with `site=tree` (the tree read, or a response that is not a
+tree), `site=section` (the blob read, or a blob that is not base64 or does not decode) or
+`site=issues-refs`.
+
+The page shows each projected section after the hand-written sections, in declaration order. The
+sync never reads or writes the hand-written `sections/<id>` documents, so a snapshot section cannot
+overwrite one.
+
+Honest limits: only ATX headings; the heading must match exactly (it is not a GitHub anchor slug);
+the first match wins; inline Markdown is shown as typed; a table needs its delimiter row; a very
+large repo's tree read can come back truncated, and the file then reads as missing; `refs` covers
+only the newest 500 closed issues; section content counts toward the 1,000,000-byte snapshot cap,
+so eight large sections plus a large issue set can make the whole sync skip with `too-large`.
 
 ## The skill's procedures
 

@@ -497,7 +497,7 @@ item, including every hard floor, are in
 | 8 | `Autonomy decision record` | Optional | A human-applied grant label, plus the record an issue body must carry to qualify |
 | 9 | `Autonomy mode` | Optional | `mode: autonomous` turns items 4 and 5 on together (see [Autonomous mode](#autonomous-mode)) |
 | 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
-| 11 | `Tracker` | Optional | The URL of the repo's live tracker page, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
+| 11 | `Tracker` | Optional | The URL of the repo's live tracker page and optional `section:` lines naming repo files to project onto it, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
 | 12 | `Append-only changelog` | Optional | The changelog file and section that only ever grows, so a full-auto run can build issues that share it in parallel and settle its merge conflict mechanically ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 | 13 | `Post-merge CI` | Optional | The workflows a full-auto run waits for after each merge, and how long, so a red that only post-merge CI shows is caught and fixed forward once. Needs the `Bash(gh run list:*)` grant ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 

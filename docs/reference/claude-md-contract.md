@@ -485,11 +485,13 @@ generic subagents need:
     validation ever read this section; nothing else in the harness does.
 
 11. **Tracker** (optional) — a section titled exactly "Tracker" whose first fenced block holds one
-    line, `url: https://...`, the address of this repo's live tracker artifact (blank lines and `#`
-    comment lines are allowed; any other line is an unknown key). It is read by
+    `url: https://...` line, the address of this repo's live tracker artifact, and optionally up to
+    eight `section: <id> <path>#<heading>` lines, each naming a committed `.md` file whose table
+    or list under that heading the sync projects onto the page (blank lines and `#` comment lines
+    are allowed; any other line is an unknown key). It is read by
     `bin/tracker-sync.sh` and the `tracker` skill only: no section means no tracker, never an
-    error. A malformed section (`no-fence`, `no-url`, `multiple-urls`, `bad-url` or `unknown-key`)
-    makes each sync report `tracker=malformed` and skip. The doctor does not validate it. See
+    error. A malformed section (`no-fence`, `unknown-key`, `no-url`, `multiple-urls`, `bad-url` or
+    `bad-section`) makes each sync report `tracker=malformed` and skip. The doctor does not validate it. See
     [tracker.md](tracker.md) for the page, the snapshot and the limits.
 
 12. **Append-only changelog** (optional) — a section titled exactly "Append-only changelog" at any

@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #646: the "Tracker" fence takes up to eight `section: <id> <path>#<heading>` lines; each sync
+  projects the first table or list under that heading of a committed `.md` file onto the page and
+  shows the live state of closed issues its rows reference. A dropped section is a `warn=` line.
 - #648: the tracker shows CI on the default branch and the verification baseline (its date, its
   commit and whether it trails main); a failed CI read skips the sync with `site=ci`. Re-publish an
   existing tracker's page (`tracker-sync.sh page`, then the skill's Create publish step) to see it.

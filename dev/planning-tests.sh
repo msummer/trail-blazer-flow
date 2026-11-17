@@ -12573,9 +12573,11 @@ exit 1'
 # carve-out Part 16 documents; logs every call to DIR/.gh-calls; one reject-<site> marker per query
 # site), a stub `git` (--show-toplevel is DIR/work, --git-common-dir is DIR/work/.git, and a
 # not-a-repo marker makes it exit 128) and a stub `date` printing a fixed timestamp. The stub's
-# `issue list --state closed` filters closed.json by the milestone NUMBER in its own --milestone
-# argument (a title passed instead would match the wrong milestone or none), so a script that
-# ignored the milestone would see another milestone's issues. The fixtures' JSON follows the shapes
+# `api` answers milestones, branches (#646: with the commit's tree sha), git/trees (tree.json) and
+# git/blobs (blob-<sha>.json). Its `issue list --state closed` filters closed.json by the
+# milestone NUMBER in its own --milestone argument (a title passed instead would match the wrong
+# milestone or none), so a script that ignored the milestone would see another milestone's
+# issues; without --milestone it answers refs.json, the repo-file sections' references query. The fixtures' JSON follows the shapes
 # probed on gh 2.102.0: blockedBy is {nodes:[...],totalCount:n}, an open issue's stateReason is "".
 # Bulky inputs (the too-large and truncated fixtures) are built with jq, never hand-typed.
 
@@ -12636,6 +12638,13 @@ case "$1 $2" in
       repos/*/commits/*/check-runs*)
         if fire ci; then echo "stub: simulated failure" >&2; exit 1; fi
         cat "__DIR__/ci.json"; exit 0 ;;
+      repos/*/git/trees/*)
+        if fire tree; then echo "stub: simulated failure" >&2; exit 1; fi
+        cat "__DIR__/tree.json"; exit 0 ;;
+      repos/*/git/blobs/*)
+        if fire section; then echo "stub: simulated failure" >&2; exit 1; fi
+        if [ ! -f "__DIR__/blob-${2##*/}.json" ]; then echo "stub: no such blob ${2##*/}" >&2; exit 1; fi
+        cat "__DIR__/blob-${2##*/}.json"; exit 0 ;;
     esac
     echo "stub: unexpected api path $2" >&2; exit 1 ;;
   "issue list")
@@ -12648,7 +12657,10 @@ case "$1 $2" in
           if [ "$prev" = "--milestone" ]; then ms="$a"; fi
           prev="$a"
         done
-        if [ -z "$ms" ]; then echo "stub: closed list without --milestone" >&2; exit 1; fi
+        if [ -z "$ms" ]; then
+          if fire issues-refs; then echo "stub: simulated failure" >&2; exit 1; fi
+          cat "__DIR__/refs.json"; exit 0
+        fi
         jq -c --arg t "$ms" '[.[] | select(.milestone.number == ($t | tonumber? // -1))]' "__DIR__/closed.json"; exit 0 ;;
       *" --state open "*)
         if fire issues-open; then echo "stub: simulated failure" >&2; exit 1; fi
@@ -12703,8 +12715,10 @@ build_tracker_env() {
   chmod +x "$dir/tbin/date"
   printf '{"nameWithOwner":"o/r","url":"https://example.invalid/o/r","defaultBranchRef":{"name":"main"}}\n' > "$dir/repo.json"
   printf '[{"number":1,"title":"v1","html_url":"https://example.invalid/o/r/milestone/1","due_on":null,"state":"open"},{"number":2,"title":"v2","html_url":"https://example.invalid/o/r/milestone/2","due_on":"2026-11-01T00:00:00Z","state":"open"}]\n' > "$dir/milestones.json"
-  printf '{"name":"main","commit":{"sha":"0123456789abcdef0123456789abcdef01234567"}}\n' > "$dir/branch.json"
+  printf '{"name":"main","commit":{"sha":"0123456789abcdef0123456789abcdef01234567","commit":{"tree":{"sha":"89abcdef0123456789abcdef0123456789abcdef"}}}}\n' > "$dir/branch.json"
   printf '{"total_count":2,"check_runs":[{"id":2,"name":"test","status":"completed","conclusion":"success","html_url":"https://example.invalid/o/r/actions/runs/1/job/2"},{"id":3,"name":"deploy","status":"completed","conclusion":"skipped","html_url":"https://example.invalid/o/r/actions/runs/1/job/3"}]}\n' > "$dir/ci.json"
+  printf '{"sha":"89abcdef0123456789abcdef0123456789abcdef","tree":[],"truncated":false}\n' > "$dir/tree.json"
+  printf '[]\n' > "$dir/refs.json"
   tk_arr \
     "$(tk_i 1 '[]' 1)" \
     "$(tk_i 2 '["plan-proposed"]' 1 "$(tk_blocker 1 OPEN)")" \
@@ -12748,6 +12762,36 @@ tk_jq() {
 }
 tk_no_state() {
   [ ! -e "$(tk_state_file "$1")" ] || { __ok=0; __why="${__why}state.json should not exist\n"; }
+}
+
+# tk_sha N — a 40-hex sha derived from N, for tree entries and blob files.
+tk_sha() { printf '%040x' "$1"; }
+# tk_blob DIR PATH SHA CONTENT [MODE] [SIZE] — a tree.json entry for PATH (type blob, MODE default
+# 100644, SIZE default CONTENT's byte count) and the blob file the stub serves for SHA: base64,
+# wrapped at 60 columns like GitHub's.
+tk_blob() {
+  local dir="$1" path="$2" sha="$3" content="$4" mode="${5:-100644}" size b64
+  size="${6:-$(printf '%s' "$content" | wc -c | tr -d ' ')}"
+  b64="$(printf '%s' "$content" | jq -R -s -r '@base64' | fold -w 60)"$'\n'
+  jq -c --arg p "$path" --arg m "$mode" --arg s "$sha" --argjson z "$size" \
+    '.tree |= (map(select(.path != $p)) + [{path:$p,mode:$m,type:"blob",sha:$s,size:$z}])' "$dir/tree.json" > "$dir/tree.json.new" && mv "$dir/tree.json.new" "$dir/tree.json"
+  jq -n -c --arg s "$sha" --argjson z "$size" --arg c "$b64" '{sha:$s,size:$z,encoding:"base64",content:$c}' > "$dir/blob-$sha.json"
+}
+# tk_section_env DIR — one declared table section whose rows reference #2 (in scope) and #30 (a
+# closed issue outside the open milestones; refs.json also holds an unreferenced #31). The
+# working-tree copy of the file differs from the committed one.
+tk_section_env() {
+  local dir="$1"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nsection: status docs/status.md#Milestones')"
+  tk_blob "$dir" docs/status.md "$(tk_sha 1)" "$(printf '# Status\n\n## Milestones\n\n| Name | Refs |\n|---|---|\n| a | #2 #30 |\n')"
+  tk_arr "$(tk_i 30 '[]' null null CLOSED COMPLETED)" "$(tk_i 31 '[]' null null CLOSED COMPLETED)" > "$dir/refs.json"
+  mkdir -p "$dir/work/docs"
+  printf '## Milestones\n\nworking tree copy\n' > "$dir/work/docs/status.md"
+}
+# tk_refs_calls DIR — how many closed issue lists without --milestone (the references query) ran.
+tk_refs_calls() {
+  [ -f "$1/.gh-calls" ] || { printf '0'; return 0; }
+  grep -F -- 'issue list --state closed' "$1/.gh-calls" | grep -cvF -- '--milestone'
 }
 
 # mutant:622-precedence — moves the pr-open arm of the state chain above needs-human and blocked,
@@ -12929,12 +12973,14 @@ case_tracker_milestone_counts() {
   tk_jq "$dir" '[.issues[] | select(.milestone == null) | .number]' '[5,12]'
 }
 
-# tk_query_failed NAME SITE — a failing query at SITE with a stale state.json already present:
+# tk_query_failed NAME SITE [SETUP_FN] — a failing query at SITE (after SETUP_FN DIR, if given) with
+# a stale state.json already present:
 # result=skip, reason=query-failed site=SITE, exit 1, and the stale file removed. Killed by
 # 622-fail-open (issues-open) and 622-stale-file (every site).
 tk_query_failed() {
   local dir; dir="$(mk_fixture "$1")"
   build_tracker_env "$dir"
+  if [ -n "${3:-}" ]; then "$3" "$dir"; fi
   mkdir -p "$dir/work/.git/trail-blazer/tracker"
   printf 'stale' > "$(tk_state_file "$dir")"
   printf 'x' > "$dir/reject-$2"
@@ -13095,6 +13141,244 @@ case_tracker_health_baseline_null() {
   tk_jq "$dir" '[.health.baseline, .health.baselineCurrent]' '[null,null]'
 }
 
+case_tracker_query_failed_tree() { tk_query_failed tracker-query-failed-tree tree tk_section_env; }
+case_tracker_query_failed_section() { tk_query_failed tracker-query-failed-section section tk_section_env; }
+case_tracker_query_failed_issues_refs() { tk_query_failed tracker-query-failed-issues-refs issues-refs tk_section_env; }
+
+# mutant:646-path-dotdot — drops the `..` segment check of a declared path, so a path climbing out
+# of its directory is accepted.
+#
+# mutant:646-reason-order — validates the section values before the url, so a bad url next to a
+# bad section reads bad-section.
+#
+# mutant:646-missing-fails-sync — turns the section-missing warning into a skip, so one absent file
+# fails the whole sync instead of dropping its section.
+#
+# mutant:646-section-fail-open — drops a section whose blob read failed instead of skipping, so a
+# failed read is published as a snapshot without it.
+#
+# mutant:646-mode-check — accepts any tree entry type or mode, so a symlink is read like a file.
+#
+# mutant:646-row-cap — disables the 50-row cap of a projected section.
+#
+# mutant:646-refs-cap — drops the cap on out-of-scope referenced issues.
+#
+# mutant:646-fence-decoy — stops the extractor tracking fenced code blocks, so a heading and a
+# table inside a fence are read as the section.
+#
+# mutant:646-warn-order — prints the warn lines after result=ready instead of directly before it.
+
+# tracker-malformed-bad-section — every violation of the section value rules is bad-section with
+# no gh call; the reasons are checked unknown-key, then no-url, then bad-url, then bad-section.
+# Killed by 646-path-dotdot and 646-reason-order.
+case_tracker_malformed_bad_section() {
+  local v i long_head long_id long_path fence
+  long_head="$(awk 'BEGIN { for (i = 0; i < 121; i++) printf "H" }')"
+  long_id="$(awk 'BEGIN { for (i = 0; i < 41; i++) printf "a" }')"
+  long_path="$(awk 'BEGIN { for (i = 0; i < 198; i++) printf "a" }').md"
+  for v in 'section:' 'section: a' 'section: a docs/x.md' 'section: A docs/x.md#H' 'section: -a docs/x.md#H' \
+      'section: a_b docs/x.md#H' 'section: a /docs/x.md#H' 'section: a docs/../x.md#H' 'section: a ./x.md#H' \
+      'section: a docs/./x.md#H' 'section: a docs//x.md#H' 'section: a docs/x.txt#H' 'section: a docs/a b.md#H' \
+      'section: a docs/x.md#' 'section: a docs/x.md##H' 'section: a docs/x.md/#H' \
+      "section: a docs/x.md#$long_head" "section: $long_id docs/x.md#H" "section: a $long_path#H"; do
+    tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\n%s' "$v")" bad-section
+  done
+  tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\nsection: a docs/x.md#H\nsection: a docs/y.md#H')" bad-section
+  fence='url: https://example.invalid/a'
+  for i in 1 2 3 4 5 6 7 8 9; do fence="$(printf '%s\nsection: s%s docs/x.md#H' "$fence" "$i")"; done
+  tk_malformed tracker-malformed-bad-section "$fence" bad-section
+  tk_malformed tracker-malformed-bad-section "$(printf 'url: http://example.invalid/a\nsection: a')" bad-url
+  tk_malformed tracker-malformed-bad-section "$(printf 'section: a')" no-url
+  tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\nsections: x')" unknown-key
+  tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\nSection: x')" unknown-key
+}
+
+# tracker-section-none — no section line: no tree, blob or references call, empty sections and
+# refs, and no warn line.
+case_tracker_section_none() {
+  local dir; dir="$(mk_fixture tracker-section-none)"
+  build_tracker_env "$dir"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.sections, .refs]' '[[],[]]'
+  expect_log_count "$dir/.gh-calls" 'git/trees' 0
+  expect_log_count "$dir/.gh-calls" 'git/blobs' 0
+  [ "$(tk_refs_calls "$dir")" = 0 ] || { __ok=0; __why="${__why}a references query ran\n"; }
+  expect_floor_count "warn=" 0
+}
+
+# tracker-section-table — the first table under the exact heading, outside fences, from the
+# committed blob (not the working-tree copy): escaped pipes, a short row padded, a long row cut,
+# the list after the table and the later heading's table ignored, one tree read and one blob read.
+case_tracker_section_table() {
+  local dir body; dir="$(mk_fixture tracker-section-table)"
+  build_tracker_env "$dir"
+  tk_section_env "$dir"
+  body="$(cat <<'EOF'
+# Status
+
+```
+## Milestones
+decoy | x
+---|---
+```
+
+Intro.
+
+## Milestones
+
+Some prose | with a pipe but no delimiter.
+
+| Name | Scope | Note |
+|:--|--:|---|
+| v1 | #2 (#20) | a \| b |
+| short |
+| long | #30,#31 C#5 | n | extra |
+
+- list after the table #99
+
+## Next
+
+| X | Y |
+|---|---|
+| ignored | #98 |
+EOF
+)"
+  tk_blob "$dir" docs/status.md "$(tk_sha 1)" "$body"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.sections' '[{"id":"status","title":"Milestones","kind":"table","source":"docs/status.md#Milestones","columns":["Name","Scope","Note"],"rows":[{"cells":["v1","#2 (#20)","a | b"],"issues":[2,20]},{"cells":["short","",""],"issues":[]},{"cells":["long","#30,#31 C#5","n"],"issues":[30,31]}],"truncated":false}]'
+  tk_jq "$dir" '.truncated' false
+  expect_log_count "$dir/.gh-calls" 'git/trees/89abcdef0123456789abcdef0123456789abcdef?recursive=1' 1
+  expect_log_count "$dir/.gh-calls" "git/blobs/$(tk_sha 1)" 1
+  expect_floor_count "warn=" 0
+}
+
+# tracker-section-list — a bullet list with a continuation line and a nested item folded into its
+# parent, a tab turned into a space, a [x] item kept verbatim, a list ended by a prose line; a
+# loose list (blank line between items) ended by prose; an ordered list; CRLF input throughout.
+case_tracker_section_list() {
+  local dir body cr; dir="$(mk_fixture tracker-section-list)"
+  build_tracker_env "$dir"
+  cr="$(printf '\r')"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nsection: bul docs/l.md#Bullets\nsection: loo docs/l.md#Loose\nsection: ord docs/l.md#Ordered')"
+  body="$(printf '## Bullets\n\n- first #3\n  continued here\n  - nested #4\n- second\ttabbed\n- [x] done #5\nProse ends the list.\n- not part\n\n## Loose\n\n* one\n\n* two #6\n\nProse again.\n\n* three\n\n## Ordered\n\n3) start\n4) next #7\n')"
+  body="$(printf '%s\n' "$body" | sed "s/\$/$cr/")"
+  tk_blob "$dir" docs/l.md "$(tk_sha 2)" "$body"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.sections[] | [.id, .kind, .rows, .truncated]]' '[["bul","list",[{"text":"first #3 continued here - nested #4","issues":[3,4]},{"text":"second tabbed","issues":[]},{"text":"[x] done #5","issues":[5]}],false],["loo","list",[{"text":"one","issues":[]},{"text":"two #6","issues":[6]}],false],["ord","list",[{"text":"start","issues":[]},{"text":"next #7","issues":[7]}],false]]'
+  expect_log_count "$dir/.gh-calls" 'git/blobs' 3
+}
+
+# tracker-section-limits — 60 rows cut to 50, 10 columns cut to 8, a 300-character cell cut to
+# 200, all marking the section truncated (the snapshot's own truncated stays false); exactly 50
+# rows of 200-character cells is not truncated; a file over the byte cap warns with no blob read.
+# Killed by 646-row-cap.
+case_tracker_section_limits() {
+  local dir; dir="$(mk_fixture tracker-section-limits)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nsection: big docs/big.md#Big\nsection: exact docs/exact.md#Exact\nsection: huge docs/huge.md#Huge')"
+  tk_blob "$dir" docs/big.md "$(tk_sha 3)" "$(jq -n -r '"## Big\n", ([range(1;11) | "c\(.)"] | "| " + join(" | ") + " |"), ([range(1;11) | "---"] | "|" + join("|") + "|"), (range(1;61) as $r | [range(1;11) | if . == 2 then ("x" * 300) else "r\($r)c\(.)" end] | "| " + join(" | ") + " |")')"
+  tk_blob "$dir" docs/exact.md "$(tk_sha 4)" "$(jq -n -r '"## Exact\n", "| A | B |", "|---|---|", (range(1;51) as $r | "| r\($r) | " + ("y" * 200) + " |")')"
+  tk_blob "$dir" docs/huge.md "$(tk_sha 5)" '## Huge' 100644 262145
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.sections[0] | [.id, .truncated, (.columns | length), (.rows | length), (.rows[0].cells | length), (.rows[0].cells[1] | length), .rows[49].cells[0]]' '["big",true,8,50,8,200,"r50c1"]'
+  tk_jq "$dir" '.sections[1] | [.id, .truncated, (.rows | length), (.rows[0].cells[1] | length)]' '["exact",false,50,200]'
+  tk_jq "$dir" '.sections | length' 2
+  tk_jq "$dir" '.truncated' false
+  expect_floor_line "warn=section-too-large section=huge"
+  expect_log_count "$dir/.gh-calls" 'git/blobs' 2
+  expect_log_count "$dir/.gh-calls" "git/blobs/$(tk_sha 5)" 0
+}
+
+# tracker-section-warn — a path absent from the tree, a symlink entry, a heading only inside a
+# fence, and a heading with prose only each drop their section with one warn line, in declaration
+# order directly before result=ready; the valid section stays; no file content reaches stdout or
+# stderr; the run exits 0.
+case_tracker_section_warn() {
+  local dir tail5 want; dir="$(mk_fixture tracker-section-warn)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nsection: miss docs/absent.md#X\nsection: link docs/link.md#X\nsection: fenced docs/f.md#Only\nsection: prose docs/p.md#Only\nsection: ok docs/ok.md#Fine')"
+  tk_blob "$dir" docs/link.md "$(tk_sha 6)" "$(printf '## X\n\n| a | b |\n|---|---|\n| SENTINEL-646-LINK | 1 |\n')" 120000
+  tk_blob "$dir" docs/f.md "$(tk_sha 7)" "$(printf '```\n## Only\n| a | b |\n|---|---|\n| SENTINEL-646-FENCE | 1 |\n```\n')"
+  tk_blob "$dir" docs/p.md "$(tk_sha 8)" "$(printf '## Only\n\nJust prose, SENTINEL-646-PROSE.\n')"
+  tk_blob "$dir" docs/ok.md "$(tk_sha 9)" "$(printf '## Fine\n\n| a | b |\n|---|---|\n| SENTINEL-646-OK | 1 |\n')"
+  run_tracker "$dir"
+  expect_rc 0
+  want="warn=section-missing section=miss
+warn=section-missing section=link
+warn=section-no-heading section=fenced
+warn=section-empty section=prose
+result=ready"
+  tail5="$(printf '%s\n' "$planning_out" | tail -n 5)"
+  [ "$tail5" = "$want" ] || { __ok=0; __why="${__why}stdout tail mismatch, got:\n$tail5\n"; }
+  tk_jq "$dir" '.sections | map(.id)' '["ok"]'
+  expect_log_count "$dir/.gh-calls" 'git/blobs' 3
+  case "$planning_out$planning_err" in
+    *SENTINEL-646*) __ok=0; __why="${__why}file content reached stdout or stderr\n" ;;
+  esac
+}
+
+# tracker-section-refs — a #<n> counts only when not preceded by a letter, digit, _, &, / or #
+# and not followed by a letter, digit or _; one closed list without --milestone (limit 500) reads
+# the out-of-scope numbers and only referenced ones are kept; in-scope references cause no query;
+# at most the 50 lowest out-of-scope numbers are read.
+case_tracker_section_refs() {
+  local dir; dir="$(mk_fixture tracker-section-refs)"
+  build_tracker_env "$dir"
+  tk_section_env "$dir"
+  tk_blob "$dir" docs/status.md "$(tk_sha 10)" "$(printf '## Milestones\n\n| A |\n|---|\n| #2 (#20) #30,#31 C#5 &#6; x/#7 #8a ##9 |\n')"
+  tk_arr "$(tk_i 30 '[]' null null CLOSED COMPLETED)" "$(tk_i 32 '[]' null null CLOSED COMPLETED)" > "$dir/refs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.sections[0].rows[0].issues' '[2,20,30,31]'
+  tk_jq "$dir" '.refs' '[{"number":30,"title":"Issue 30","url":"https://example.invalid/o/r/issues/30","state":"done"}]'
+  tk_jq "$dir" '.issues | length' 9
+  [ "$(tk_refs_calls "$dir")" = 1 ] || { __ok=0; __why="${__why}expected one references query\n"; }
+  expect_log_count "$dir/.gh-calls" 'issue list --state closed --limit 500 --json' 1
+  # only in-scope references: no references query
+  rm -f "$dir/.gh-calls"
+  build_tracker_env "$dir"
+  tk_section_env "$dir"
+  tk_blob "$dir" docs/status.md "$(tk_sha 11)" "$(printf '## Milestones\n\n| A |\n|---|\n| #2 #20 |\n')"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.refs' '[]'
+  [ "$(tk_refs_calls "$dir")" = 0 ] || { __ok=0; __why="${__why}an all-in-scope reference ran a query\n"; }
+  # 60 out-of-scope references: the 50 lowest are kept
+  rm -f "$dir/.gh-calls"
+  build_tracker_env "$dir"
+  tk_section_env "$dir"
+  tk_blob "$dir" docs/status.md "$(tk_sha 12)" "$(jq -n -r '"## Milestones\n", "| A |", "|---|", (range(0;10) as $r | "| " + ([range(0;6) | "#\(101 + $r * 6 + .)"] | join(" ")) + " |")')"
+  jq -n -c '[range(101;161) | {number:., title:"t", url:"https://example.invalid/o/r/issues/1", state:"CLOSED", stateReason:"COMPLETED", labels:[], milestone:null, blockedBy:{nodes:[],totalCount:0}}]' > "$dir/refs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.refs[].number] == [range(101;151)]' true
+}
+
+# tracker-section-bad-blob — a blob that is not base64-encoded, or whose content does not decode,
+# is a skip naming site=section, with the stale state.json removed.
+case_tracker_section_bad_blob() {
+  local dir variant; dir="$(mk_fixture tracker-section-bad-blob)"
+  for variant in encoding content; do
+    build_tracker_env "$dir"
+    tk_section_env "$dir"
+    mkdir -p "$dir/work/.git/trail-blazer/tracker"
+    printf 'stale' > "$(tk_state_file "$dir")"
+    case "$variant" in
+      encoding) jq -c '.encoding = "utf-8"' "$dir/blob-$(tk_sha 1).json" > "$dir/b.new" ;;
+      content) jq -c '.content = "!!!!"' "$dir/blob-$(tk_sha 1).json" > "$dir/b.new" ;;
+    esac
+    mv "$dir/b.new" "$dir/blob-$(tk_sha 1).json"
+    run_tracker "$dir"
+    expect_rc 1
+    [ "$planning_out" = "$(printf 'result=skip\nreason=query-failed site=section')" ] || { __ok=0; __why="${__why}$variant: expected skip/section, got $planning_out\n"; }
+    tk_no_state "$dir"
+  done
+}
+
 # tracker-too-large — about 1.2 MB of snapshot: skip with the byte count, exit 1, no state.json
 # (a stale one included). Killed by 622-size-cap.
 case_tracker_too_large() {
@@ -13154,6 +13438,7 @@ case_tracker_never_writes() {
   local dir t line before after bad
   dir="$(mk_fixture tracker-never-writes)"
   build_tracker_env "$dir"
+  tk_section_env "$dir"
   for t in touch cp ln chmod tee curl; do
     floor_write_script "$dir" "$dir/tbin/$t" 'printf "%s\n" "${0##*/} $*" >> "__DIR__/.trap-calls"
 exit 1'
@@ -13560,6 +13845,17 @@ cases=(
   "tracker-health-ci|case_tracker_health_ci|#648: the CI roll-up takes the newest run per check name, failing over pending over passing, null with no runs; one GET of the real sha; a bad answer or sha skips with site=ci"
   "tracker-health-baseline|case_tracker_health_baseline|#648: a harness-shaped BASELINE.md parses to commit, date and results; baselineCurrent follows the commit prefix; bounds and soft failures hold"
   "tracker-health-baseline-null|case_tracker_health_baseline_null|#648: a missing, non-file, oversized or unparseable BASELINE.md gives a null baseline and a ready sync"
+  "tracker-query-failed-tree|case_tracker_query_failed_tree|#646: a failing repo tree read skips with site=tree, removes the stale state.json"
+  "tracker-query-failed-section|case_tracker_query_failed_section|#646: a failing blob read skips with site=section, removes the stale state.json, never drops the section"
+  "tracker-query-failed-issues-refs|case_tracker_query_failed_issues_refs|#646: a failing references query skips with site=issues-refs, removes the stale state.json"
+  "tracker-section-bad-blob|case_tracker_section_bad_blob|#646: a blob that is not base64 or does not decode skips with site=section"
+  "tracker-malformed-bad-section|case_tracker_malformed_bad_section|#646: every section value violation is bad-section with no gh call; reasons are checked in the documented order"
+  "tracker-section-none|case_tracker_section_none|#646: no section line means no tree, blob or references call, empty sections and refs, no warn line"
+  "tracker-section-table|case_tracker_section_table|#646: the first table under the exact heading is read from the committed blob, with escaped pipes, padded and cut rows"
+  "tracker-section-list|case_tracker_section_list|#646: a list is projected with folded continuation and nested items, loose and ordered lists, CRLF and tabs"
+  "tracker-section-limits|case_tracker_section_limits|#646: row, column and cell caps mark only the section truncated; a file over the byte cap warns without a blob read"
+  "tracker-section-warn|case_tracker_section_warn|#646: missing, symlink, no-heading and empty sections each warn once in declaration order and never fail the sync or leak content"
+  "tracker-section-refs|case_tracker_section_refs|#646: only well-formed #<n> references count; one references query reads out-of-scope numbers, capped at the 50 lowest"
   "tracker-too-large|case_tracker_too_large|#622: a snapshot over the byte cap skips with the byte count and leaves no state.json"
   "tracker-truncated|case_tracker_truncated|#622: reaching the open-issue or per-milestone closed-issue limit sets truncated"
   "tracker-never-writes|case_tracker_never_writes|#622: only read gh calls, no booby-trapped write command fires, the working tree is byte-identical"
