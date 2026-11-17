@@ -1238,6 +1238,8 @@
         "tracker-query-failed-issues-closed",
         "tracker-query-failed-prs",
         "tracker-query-failed-branch",
+        "tracker-query-failed-ci",
+        "tracker-health-ci",
         "tracker-too-large"
       ]
     },
@@ -1300,6 +1302,86 @@
       ],
       "expect_fail": [
         "tracker-template-matrix-states"
+      ]
+    },
+    {
+      "name": "648-ci-fail-open",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "then q_fail ci; fi\n",
+          "to": "then :; fi\n"
+        },
+        {
+          "from": "\"$work/ci.json\" >/dev/null 2>&1 || q_fail ci\n",
+          "to": "\"$work/ci.json\" >/dev/null 2>&1 || true\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-query-failed-ci",
+        "tracker-health-ci"
+      ]
+    },
+    {
+      "name": "648-ci-precedence",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "     elif any($r[]; ._c == \"failing\") then \"failing\"\n     elif any($r[]; ._c == \"pending\") then \"pending\"\n",
+          "to": "     elif any($r[]; ._c == \"pending\") then \"pending\"\n     elif any($r[]; ._c == \"failing\") then \"failing\"\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-health-ci"
+      ]
+    },
+    {
+      "name": "648-ci-latest-per-name",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      | group_by(.name // \"\")\n      | map(max_by(.id // 0) | . + {_c: cls})\n",
+          "to": "      | map(. + {_c: cls})\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-health-ci"
+      ]
+    },
+    {
+      "name": "648-baseline-cap",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "[ -n \"$bl_bytes\" ] && [ \"$bl_bytes\" -le \"$BASELINE_MAX_BYTES\" ]",
+          "to": "true"
+        }
+      ],
+      "expect_fail": [
+        "tracker-health-baseline-null"
+      ]
+    },
+    {
+      "name": "648-baseline-current",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "($sha | startswith($b.commit))",
+          "to": "true"
+        }
+      ],
+      "expect_fail": [
+        "tracker-health-baseline"
       ]
     }
   ]
