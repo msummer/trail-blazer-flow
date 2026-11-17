@@ -13084,6 +13084,21 @@ case_tracker_template_generic() {
   grep -qF -- '@REPO_NAME@' "$f" || { __ok=0; __why="${__why}template lacks @REPO_NAME@\n"; }
 }
 
+# tracker-template-matrix-states — the template's matrix state list (MSTATES) and its CSS state
+# rules (.mx-s[data-m=...]) are the same closed set, exactly the five documented states.
+# mutant:647-matrix-css-drop — deletes the partial state's CSS rule, so a listed state has no colour.
+# mutant:647-matrix-vocab-drift — adds a sixth state to MSTATES, so the list outruns the CSS rules.
+case_tracker_template_matrix_states() {
+  local f="$root/templates/tracker/index.html" js css want
+  [ -f "$f" ] || { __ok=0; __why="${__why}template missing\n"; return; }
+  js="$(sed -n 's/^  var MSTATES = \[\(.*\)\];$/\1/p' "$f" | tr -d ' "' | tr ',' '\n' | sort)"
+  css="$(grep -o '\.mx-s\[data-m="[a-z]*"\]' "$f" | sed 's/.*data-m="\([a-z]*\)".*/\1/' | sort -u)"
+  want="$(printf '%s\n' bad good none partial waiting)"
+  [ -n "$js" ] || { __ok=0; __why="${__why}MSTATES line not found\n"; return; }
+  [ "$js" = "$want" ] || { __ok=0; __why="${__why}MSTATES is not the five documented states\n"; }
+  [ "$css" = "$want" ] || { __ok=0; __why="${__why}CSS state rules are not the five documented states\n"; }
+}
+
 # tracker-usage — an unknown argument, an extra argument, or no git repository is exit 2 with no
 # stdout.
 case_tracker_usage() {
@@ -13394,6 +13409,7 @@ cases=(
   "tracker-deterministic|case_tracker_deterministic|#622: two runs over the same inputs write a byte-identical state.json"
   "tracker-page|case_tracker_page|#622: page mode writes the template with @REPO_NAME@ replaced, for any section state; a bad repo name skips"
   "tracker-template-generic|case_tracker_template_generic|#622: the shipped page has no external resource, localStorage or innerHTML, and keeps its @REPO_NAME@ placeholder"
+  "tracker-template-matrix-states|case_tracker_template_matrix_states|#647: the template's matrix state list and its CSS state rules are the same closed set, the five documented states"
   "tracker-usage|case_tracker_usage|#622: an unknown or extra argument, or no git repository, is exit 2 with no stdout"
 )
 

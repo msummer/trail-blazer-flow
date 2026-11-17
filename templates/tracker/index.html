@@ -70,6 +70,17 @@ a { color: var(--accent); }
 .row { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; padding: 6px 0; border-top: 1px solid var(--line); }
 .row:first-child { border-top: 0; }
 .row .title { flex: 1 1 14rem; min-width: 0; }
+.mx-wrap { overflow-x: auto; }
+.mx { border-collapse: collapse; overflow-wrap: normal; }
+.mx th, .mx td { text-align: left; vertical-align: top; padding: 4px 8px; border-top: 1px solid var(--line); min-width: 7rem; overflow-wrap: normal; }
+.mx thead th { border-top: 0; color: var(--muted); font-weight: 600; }
+.mx th[scope="row"] { position: sticky; left: 0; background: var(--card); font-weight: 400; }
+.mx-s { display: inline-block; max-width: 14rem; font-size: 0.8rem; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); overflow-wrap: anywhere; }
+.mx-s[data-m="good"] { color: var(--done); border-color: var(--done); }
+.mx-s[data-m="partial"] { color: var(--wait); border-color: var(--wait); }
+.mx-s[data-m="bad"] { color: var(--bad); border-color: var(--bad); }
+.mx-s[data-m="waiting"] { color: var(--active); border-color: var(--active); }
+.mx-s[data-m="none"] { color: var(--muted); border-color: var(--muted); }
 .badge { display: inline-block; font-size: 0.75rem; font-weight: 600; padding: 1px 8px; border-radius: 999px; border: 1px solid var(--line); color: var(--muted); }
 .badge[data-s="done"] { color: var(--done); border-color: var(--done); }
 .badge[data-s="pr-open"], .badge[data-s="approved"] { color: var(--active); border-color: var(--active); }
@@ -232,6 +243,88 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     return wrap;
   }
 
+  var MSTATES = ["good", "partial", "bad", "waiting", "none"];
+  var MX_COLS = 20, MX_ROWS = 200, MX_ISSUES = 10, MX_TEXT = 120;
+
+  function mxText(v) {
+    if (typeof v !== "string" && !(typeof v === "number" && isFinite(v))) { return ""; }
+    var t = String(v);
+    return t.length > MX_TEXT ? t.slice(0, MX_TEXT) + "\u2026" : t;
+  }
+
+  function mxState(c) {
+    if (c && typeof c === "object" && typeof c.state === "string" && MSTATES.indexOf(c.state) >= 0) {
+      return c.state;
+    }
+    return "none";
+  }
+
+  function mxChip(state, text) {
+    var chip = el("span", "mx-s", text);
+    chip.setAttribute("data-m", state);
+    return chip;
+  }
+
+  function matrixBlock(d, byNum, repoUrl) {
+    var box = el("div");
+    var cols = Array.isArray(d.columns) ? d.columns : [];
+    var rows = Array.isArray(d.rows) ? d.rows : [];
+    var ncol = Math.min(cols.length, MX_COLS);
+    var shown = rows.slice(0, MX_ROWS);
+    if (d.legend && typeof d.legend === "object" && !Array.isArray(d.legend)) {
+      var lg = el("div", "meta");
+      MSTATES.forEach(function (st) {
+        var label = mxText(d.legend[st]);
+        if (label) { lg.appendChild(mxChip(st, label)); }
+      });
+      box.appendChild(lg);
+    }
+    var cut = [];
+    if (cols.length > MX_COLS) { cut.push("first " + String(MX_COLS) + " of " + String(cols.length) + " columns"); }
+    if (rows.length > MX_ROWS) { cut.push("first " + String(MX_ROWS) + " of " + String(rows.length) + " rows"); }
+    if (cut.length) { box.appendChild(el("p", "muted", "showing the " + cut.join(" and the "))); }
+    var card = el("div", "card mx-wrap");
+    box.appendChild(card);
+    if (!shown.length) {
+      card.appendChild(el("p", "muted", "No rows."));
+      return box;
+    }
+    var table = el("table", "mx");
+    var head = el("tr");
+    head.appendChild(el("th"));
+    for (var i = 0; i < ncol; i++) { head.appendChild(el("th", null, mxText(cols[i]))); }
+    table.appendChild(el("thead")).appendChild(head);
+    var body = el("tbody");
+    shown.forEach(function (r) {
+      if (!r || typeof r !== "object") { return; }
+      var tr = el("tr");
+      var th = el("th", null, mxText(r.label));
+      th.setAttribute("scope", "row");
+      (Array.isArray(r.issues) ? r.issues : []).filter(function (n) {
+        return typeof n === "number" && n > 0 && n % 1 === 0;
+      }).slice(0, MX_ISSUES).forEach(function (n) {
+        var issue = byNum[n];
+        th.appendChild(document.createTextNode(" "));
+        th.appendChild(link("#" + n, issue ? issue.url : (repoUrl ? repoUrl + "/issues/" + n : "")));
+        if (issue) { th.appendChild(badge(String(issue.state))); }
+      });
+      tr.appendChild(th);
+      var cells = Array.isArray(r.cells) ? r.cells : [];
+      for (var j = 0; j < ncol; j++) {
+        var c = cells[j];
+        var st = mxState(c);
+        var t = mxText(c && typeof c === "object" ? c.text : undefined);
+        var td = el("td");
+        td.appendChild(mxChip(st, t || (st === "none" ? "" : st)));
+        tr.appendChild(td);
+      }
+      body.appendChild(tr);
+    });
+    table.appendChild(body);
+    card.appendChild(table);
+    return box;
+  }
+
   function sectionBlock(s, byNum, repoUrl) {
     var d = s.data;
     var box = el("div");
@@ -261,6 +354,7 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
         c2.appendChild(row);
       });
       box.appendChild(c2);
+    } else if (d.kind === "matrix") { box.appendChild(matrixBlock(d, byNum, repoUrl));
     } else {
       String(d.text || "").split("\n").forEach(function (line) {
         if (line) { box.appendChild(el("p", null, line)); }
