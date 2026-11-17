@@ -470,8 +470,8 @@ step 5.
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
   skill's (never polls for new work or repeats a pass; the merge pass's bounded waits — guard
   (e)'s declared deploy wait, the pre-first-merge recheck, the one-shot
-  re-read of a transiently failed read, the serial train's update-branch CI wait, and a full-auto
-  run's declared post-merge CI watch — are the five bounded exceptions). On Codex there is no `/loop`: recurrence is `bin/codex-scheduled-run.sh`
+  re-read of a transiently failed read, the serial train's update-branch CI wait, and its
+  declared post-merge CI watch — are the five bounded exceptions). On Codex there is no `/loop`: recurrence is `bin/codex-scheduled-run.sh`
   under a launchd LaunchAgent (`docs/reference/codex.md` "Scheduling unattended runs (macOS)").
 - **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
   `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0

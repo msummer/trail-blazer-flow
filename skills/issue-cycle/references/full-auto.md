@@ -4,8 +4,8 @@ This file is the full-auto procedure for the issue-cycle skill (#623). `SKILL.md
 paragraph decides whether it applies; read this file only when that paragraph has sent you here.
 Everything this file invokes stays defined where it already is: the planner's step 6b and hard
 floor, the implementer's steps 1 and 2 and its worktree-parallel mode, step 3's merge floor and
-guards, and `serial-train.md`'s phases. This file only names the scope, the grant, and the
-ordering, and cites the rest; it restates no floor command.
+guards, and `serial-train.md`'s phases and its post-merge CI watch. This file only names the
+scope, the grant, and the ordering, and cites the rest; it restates no floor command.
 
 ## When it applies
 
@@ -30,8 +30,8 @@ auto".
 - The scope is frozen for the run: issues added later (follow-ups filed during the run included)
   are out, except the one fix-forward issue (see "Fix forward"). Print the resolved list in the
   report.
-- Right after the scope is resolved, read the "Post-merge CI" section (see "Post-merge CI
-  watch"); a malformed one stops the run there.
+- Right after the scope is resolved, read the "Post-merge CI" section (`serial-train.md`'s
+  "Post-merge CI watch"); a malformed one stops the run there.
 
 ## Authority
 
@@ -124,38 +124,15 @@ When step 3's merge pass is not active for this run, every merge step is skipped
 
 ## Post-merge CI watch
 
-Optional, and only for a repo whose `CLAUDE.md` declares a "Post-merge CI" section
-(`docs/reference/claude-md-contract.md`, item 13): its PR checks do not run every suite, so a
-merge can turn the default branch red where no pull request could show it. No section means no
-watch, silently.
+`serial-train.md`'s "Post-merge CI watch" applies as written (it is optional, and a repo with no
+"Post-merge CI" section gets no watch), with these differences.
 
-- **Read.** Once, right after the scope is resolved. A malformed section (the item's own rules)
-  stops the run there, naming the offending line, and releases the lock, as a failed scope query
-  does. `wait` is the declared minutes (1–60), default 30.
-- **When.** After every merge this run confirms (Phase A or Phase B), once the "One at a time"
-  refresh is green, guard (e) has passed and the merge-commit ancestry check has passed. For a
-  Phase A merge, read the oid first (`gh pr view <pr> --json mergeCommit --jq .mergeCommit.oid |
-  tr -d '\r'`) and run the same `git merge-base --is-ancestor <oid> <default-branch>` check;
-  anything but exit 0 is train-stopping, as in Phase B.
-- **Poll.** One call per declared workflow:
-  `gh run list --workflow "<name>" --commit <oid> --event push --limit 20 --json databaseId,status,conclusion,url --jq '.[] | "\(.databaseId) \(.status) \(if .conclusion == "" then "-" else .conclusion end) \(.url)"'`
-  (a run that is not completed prints `-` as its conclusion).
-- **Classify** the workflows together, first match wins in this order:
-  - `unknown`: a non-zero exit, a denial, a line that does not parse, or a completed run whose
-    conclusion is none of `success`, `skipped`, `neutral`, `failure`;
-  - `red`: any run `completed failure`;
-  - `pending`: some workflow has no line yet, or some run is not `completed`;
-  - `green`: every workflow has at least one line, and every line is `completed` with
-    `success`, `skipped` or `neutral`.
-- **Wait.** On `pending`, `sleep 60` and poll again, at most `wait` polls in all. A spent
-  budget is `pending`. If `sleep` is denied, poll once more immediately, then `pending` with
-  "backoff unavailable — grant `Bash(sleep:*)`". If `gh run list` is denied, the result is
-  `unknown`, naming the grant `Bash(gh run list:*)`.
-- **Outcome.** `green`: continue. `red`: Fix forward's attribution decides. `pending` or
-  `unknown`: train-stopping, with the lock released at step 5 and the journal
-  `harness-lock.sh journal <run-id> stage=run outcome=stopped reason=post-merge-ci`; quote the
-  last poll's lines and never guess, never run another query in its place.
-- **Report.** One line per merge: `post-merge-ci: PR #<pr> <first 12 of oid> <state> <run urls>`.
+- **Read.** Once, right after the scope is resolved. A malformed section stops the run there,
+  naming the offending line, and releases the lock, as a failed scope query does.
+- **A `red` after a merge this run confirmed** goes to Fix forward's attribution below instead
+  of stopping the train.
+- **A non-green pre-first-merge check** is never fixed forward (Fix forward's second condition
+  needs a merge this run confirmed) and is train-stopping.
 
 ## Fix forward (one red default branch per run)
 
@@ -179,7 +156,7 @@ Queue policy says:
 - A local baseline red: `git rev-parse <oid>^1` equals the `- commit:` SHA in
   `.claude/BASELINE.md` (a missing file or a mismatch is not attributable), and every failing
   verification command fails again on one immediate re-run on the same tip.
-- A CI red (the watch above): every declared workflow is classified `red` on `<oid>` and `green`
+- A CI red (`serial-train.md`'s watch): every declared workflow is classified `red` on `<oid>` and `green`
   on `<oid>^1`, by one query each and no wait.
 
 **Steps**, in order:

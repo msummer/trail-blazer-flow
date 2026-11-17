@@ -360,7 +360,7 @@ policy" *and* the `gh pr merge` deny lifted, or with "Autonomy mode" declaring `
 (item 9), which implies the policy for harness PRs only — the deny still has to be lifted by
 hand either way; guarded per PR, one at a time, re-verified between,
 audited in the report — in autonomous mode, item 9's serial merge train instead interleaves the
-implementation and merge passes per issue) → a closing reconciliation, comparing the run's **dispatch ledger**
+implementation and merge passes per issue; with a "Post-merge CI" section, item 13, each merge also waits for its push CI, and anything but green stops the train) → a closing reconciliation, comparing the run's **dispatch ledger**
 against `harness-status.sh`'s live queues via `reconcile-ledger.sh` (an issue with no recorded
 outcome is escalated, never dropped; a degraded live read is escalated too, never reported
 clean), then a best-effort **tracker sync** (the `tracker` skill; silent without a "Tracker"
@@ -425,8 +425,9 @@ this section is its prose summary.
 - **Post-merge CI.** Opt-in: a repo whose `CLAUDE.md` declares a "Post-merge CI" section (item 13
   of the contract) makes each merge wait, up to its `wait` minutes, for the declared workflows'
   push run on the merge commit. Green continues; red feeds fix forward; still pending when the
-  wait is spent, or any other result, stops the run. Merges then serialise at CI pace, and the
-  watch needs the `Bash(gh run list:*)` grant.
+  wait is spent, or any other result, stops the run. The run's first merge first checks the base
+  tip's push run, and anything but green there stops the run. Merges then serialise at CI pace,
+  and the watch needs the `Bash(gh run list:*)` grant.
 - **Provenance and audit.** Each approval posts the plan, then the label, then an audit comment
   whose first line is `<!-- harness-audit -->` naming the grant, then journals
   `stage=planner outcome=auto-approved reason=full-auto`; each merge's journal record adds

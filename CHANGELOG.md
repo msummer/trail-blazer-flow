@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #654: an Autonomy-mode serial train with a "Post-merge CI" section (item 13) waits for each
+  merge's push CI and checks the base tip before its first merge; anything but green stops the run
+  with a report (never fixed forward). No new grant beyond #635's.
 - #650: with `cycle-note: on` in the Tracker fence, each cycle writes a "Last cycle" tracker section
   from its dispatch ledger (stage outcomes, PR and merge slugs per issue; titles joined on the
   page). Re-publish the page to see titles and PR links.

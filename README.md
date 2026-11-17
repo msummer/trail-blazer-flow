@@ -341,7 +341,7 @@ edit that only a human can make.
   implement → verify → PR → CI → merge before the next branch is cut. Each issue then starts from
   a default branch that already contains the previous merge, so PRs don't pile up and conflict. If
   a PR is only held because it's behind, the train updates the branch once, waits for CI, and
-  re-checks the whole floor.
+  re-checks the whole floor. If your PR checks don't run every suite, add a `Post-merge CI` section (item 13): each merge then waits for its push CI, and anything but green stops the run with a report.
 - **The retry budget is configurable.** `kickback-budget:` (0–3, default 2) sets how many times a
   failed verifier review goes back to the implementer before the issue is marked `impl-blocked`. A
   review whose every finding is wording-only gets one extra fix round that doesn't count.
@@ -499,7 +499,7 @@ item, including every hard floor, are in
 | 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
 | 11 | `Tracker` | Optional | The URL of the repo's live tracker page and optional `section:` lines naming repo files to project onto it, `label-state:` lines mapping labels to display states, and an optional `cycle-note: on` line, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
 | 12 | `Append-only changelog` | Optional | The changelog file and section that only ever grows, so a full-auto run can build issues that share it in parallel and settle its merge conflict mechanically ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
-| 13 | `Post-merge CI` | Optional | The workflows a full-auto run waits for after each merge, and how long, so a red that only post-merge CI shows is caught and fixed forward once. Needs the `Bash(gh run list:*)` grant ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
+| 13 | `Post-merge CI` | Optional | The workflows the serial merge train (Autonomous mode or full auto) waits for after each merge, and how long, so a red that only post-merge CI shows stops the run (full auto fixes it forward once). Needs the `Bash(gh run list:*)` grant ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 
 Example policy sections:
 
@@ -784,6 +784,7 @@ entirely, see [docs/reference/codex.md](docs/reference/codex.md#removing-the-cod
 | You need to know what a past or unattended run did | Each run appends identifiers-only JSONL records under `.git/trail-blazer/journal/`. See the "Run journal" paragraph in `docs/reference/safety-model.md` for the format and a `jq` one-liner |
 | A run stops with a red baseline | Your default branch is failing its own verification commands. Fix `main` first, because the harness won't build on a broken base |
 | The cycle never merges anything | Run `check-harness.sh`. The usual causes are `merge autonomy: half-activated` (the deny is still in place), no CI on the repo, or a PR that touches governance files |
+| A run stops on post-merge CI | A declared workflow's push run on the default branch is red, still running or unreadable. Fix or revert on the default branch; the next run checks the tip again before it merges anything |
 | A plan you commented on wasn't revised | Only owner, member, and collaborator comments count as feedback, and only issues still labelled `plan-proposed` get revised |
 | `check-harness.sh: command not found` | The plugin isn't enabled in this session, or (on Windows) its `bin/` isn't on the Bash PATH. See below |
 

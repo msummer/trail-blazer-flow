@@ -385,7 +385,7 @@ generic subagents need:
      the next branch is cut; worktree-parallel mode is never entered inside the train (a full-auto run's waves aside — see [workflow.md](workflow.md)'s "Full auto"). A held PR
      moves the train on to the next issue; a merge-halting event (e.g. a merge denial or an
      unconfirmed merge) makes the rest of the run implement-only, opening PRs but attempting no
-     further merge; a train-stopping event (a red baseline after a merge, or a stop-switch stop)
+     further merge; a train-stopping event (a red baseline after a merge, a non-green post-merge CI result when item 13 is declared, or a stop-switch stop)
      dispatches no further issue. For a PR whose only hold is the up-to-date rail ("behind"),
      the train tries `gh pr update-branch <pr>` once (merge-from-base, never `--rebase`, skipped
      when the repo's merge method is rebase), waits a bounded time for CI, then re-evaluates the
@@ -541,8 +541,9 @@ generic subagents need:
     (Keep a Changelog's `### Added`) holds whenever the lane's bullet is not at an edge.
 
 13. **Post-merge CI** (optional) — a section titled exactly "Post-merge CI" at any heading depth,
-    whose first fenced block names the workflows whose push run a full-auto run waits for after
-    each merge, for a repo whose PR checks do not run every suite:
+    whose first fenced block names the workflows whose push run the serial merge train waits for
+    after each merge (item 9's Autonomy mode, or a full-auto run), for a repo whose PR checks do
+    not run every suite:
 
         ## Post-merge CI
 
@@ -554,17 +555,22 @@ generic subagents need:
     `workflow:` appears one or more times, each a workflow `name:` of letters, digits, spaces and
     `. _ -`, 1 to 100 characters. `wait:` is optional, whole minutes from 1 to 60, default 30.
     Blank lines and `#` comment lines are allowed; any other line, a bad value, a repeated
-    `wait:`, no `workflow:` line, or no fence makes the section malformed. It is read only by a
-    full-auto run on Claude Code (`skills/issue-cycle/references/full-auto.md`'s "Post-merge CI
-    watch"); no section means no watch, never an error, a malformed one stops that run at the
-    start, and the doctor does not validate it. It needs the `Bash(gh run list:*)` grant in
+    `wait:`, no `workflow:` line, or no fence makes the section malformed. It is read only by the
+    serial merge train on Claude Code (`skills/issue-cycle/references/serial-train.md`'s
+    "Post-merge CI watch"), never on Codex; no section means no watch, never an error, a
+    malformed one stops that run (at the train's start in Autonomy mode, at the start of a
+    full-auto run), and the doctor does not validate it. It needs the `Bash(gh run list:*)` grant in
     `templates/repo-settings.json`.
 
     What the declaration changes: each merge waits, up to `wait` minutes, for the declared
-    workflows' push run on the merge commit, so merges serialise at CI pace. A red run on a merge
-    whose parent commit was green is fixed forward once (see [workflow.md](workflow.md)'s "Full
-    auto"); a run still pending when the wait is spent, any other result, or a failed query stops
-    the run with a report.
+    workflows' push run on the merge commit, so merges serialise at CI pace, and before the run's
+    first merge the base tip's push run is checked the same way. In Autonomy mode a red,
+    still-pending or unreadable result stops the train before any further merge or dispatch; the
+    run reports and releases its lock, adding no label and filing no issue. Only a full-auto run
+    fixes a red forward, once, on a merge whose parent commit was green (see
+    [workflow.md](workflow.md)'s "Full auto"); in a full-auto run a run still pending when the
+    wait is spent, any other result, a non-green base tip, or a failed query stops the run with
+    a report.
 
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
