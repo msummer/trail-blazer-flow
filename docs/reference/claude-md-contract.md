@@ -28,7 +28,8 @@ generic subagents need:
 
    The hard floor always applies on top (no BLOCKING questions — none answered by the
    orchestrator itself, except a granted issue's record-citing answer, see item 8 below — not
-   stale, no overlap (a full-auto run narrows that to overlap with a plan outside its scope),
+   stale, no overlap (a full-auto run narrows that to overlap with a plan outside its scope, on a path other than
+   a declared changelog, item 12),
    schema/security work only if explicitly opted in, and the issue's author is
    a maintainer), every auto-approval is audited with an issue comment, and the `no-auto-approve`
    label opts any issue out. **No section means no auto-approval** — this is a trust decision that
@@ -512,7 +513,8 @@ generic subagents need:
     `CLAUDE.md` that is a symlink or anything other than a plain file).
 
     What the declaration changes: in a full-auto run (see [workflow.md](workflow.md)'s "Full
-    auto"), wave planning and rule (c) leave the declared file out of the overlap test, so lanes
+    auto"), the approval overlap clause, wave planning and rule (c) leave the declared file out of
+    the overlap test, so lanes
     that share only that changelog build in parallel; and wherever the serial train's
     update-branch fallback runs (item 9's Autonomy mode, or a full-auto run), it gains a changelog
     route for the conflict that sharing creates. `changelog-merge.sh <base-tip>

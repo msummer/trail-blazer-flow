@@ -350,7 +350,7 @@ edit that only a human can make.
 
 These floors apply in every mode, and autonomous mode can't loosen any of them. (The one
 exception: a [full-auto run](#full-auto-one-run-a-named-scope) relaxes the overlap clause between
-its own in-scope plans.)
+its own in-scope plans, and for a declared changelog.)
 
 - **It never auto-approves a plan** that has a BLOCKING question no human has answered, is stale, overlaps another
   plan's files, touches schema or security (unless your policy explicitly opts that in), comes
@@ -454,8 +454,8 @@ To push one milestone or a short list of issues through without turning on stand
 `full-auto #12 #15`. Your typed invocation is a grant for that run and that scope only:
 
 - **Plans** for the named issues are written in parallel and approved without waiting for you,
-  under the same hard floor. Plans that overlap each other, but none outside the scope, can still
-  be approved; the run then sequences them instead.
+  under the same hard floor. Plans that overlap each other, but none outside the scope (a declared
+  changelog, below, aside), can still be approved; the run then sequences them instead.
 - **Issues build in parallel worktrees** when their plans touch different files; ones that
   overlap go in later waves, each cut after the earlier PRs have merged. A changelog declared
   in an `Append-only changelog` section does not count as overlap: if every change adds a

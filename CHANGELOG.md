@@ -16,6 +16,11 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #642: full auto's hard-floor overlap clause no longer counts the declared append-only
+  changelog against out-of-scope pending plans.
+
 ## v3.6.0
 
 This minor release adds "full auto" to `issue-cycle`: one human-invoked run plans, builds in

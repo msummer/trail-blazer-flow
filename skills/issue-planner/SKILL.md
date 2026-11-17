@@ -428,7 +428,7 @@ floor; it can only add conditions.
   point — and ambiguity resolves the same way it does under 6b's policy conditions: the answer is
   no. This skill only ever reads the grant label; it never applies, restores, or re-applies it;
 - the plan is not stale (step 4) and does not overlap another pending plan's Affected areas (under
-  a full-auto grant, only one outside its scope — `references/full-auto.md` "Authority");
+  a full-auto grant, as `references/full-auto.md` "Authority" loosens it);
 - the plan's "Data / schema impact" is "None" **unless** the policy explicitly opts schema work
   in;
 - the plan's "Risks & considerations" flags nothing security-sensitive (auth, permissions,
