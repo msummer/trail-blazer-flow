@@ -1312,6 +1312,51 @@
       ]
     },
     {
+      "name": "652-items-or-array",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "arr(d.items).forEach",
+          "to": "(d.items || []).forEach"
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-section-guard"
+      ]
+    },
+    {
+      "name": "652-section-unguarded",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "guardSection(sectionBlock, s, byNum, h.repoUrl)",
+          "to": "sectionBlock(s, byNum, h.repoUrl)"
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-section-guard"
+      ]
+    },
+    {
+      "name": "652-guard-no-catch",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "try {\n      return build(s, byNum, repoUrl);\n    } catch (e) {\n      var id = s && typeof s === \"object\" && typeof s.id === \"string\" && s.id ? s.id : \"\";\n      var box = el(\"div\");\n      box.appendChild(el(\"p\", \"muted\", id ? \"Could not render the section \" + id + \".\" : \"Could not render a section.\"));\n      return box;\n    }",
+          "to": "return build(s, byNum, repoUrl);"
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-section-guard"
+      ]
+    },
+    {
       "name": "648-ci-fail-open",
       "target": "bin/tracker-sync.sh",
       "suite": "dev/planning-tests.sh",

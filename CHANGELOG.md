@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #652: a hand-written tracker section with a malformed list or phases field no longer blanks the
+  rest of the page; a section that still cannot draw shows one muted line. Re-publish an existing
+  page to pick this up.
 - #654: an Autonomy-mode serial train with a "Post-merge CI" section (item 13) waits for each
   merge's push CI and checks the base tip before its first merge; anything but green stops the run
   with a report (never fixed forward). No new grant beyond #635's.

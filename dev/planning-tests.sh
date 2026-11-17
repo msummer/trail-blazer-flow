@@ -13651,6 +13651,26 @@ case_tracker_template_matrix_states() {
   [ "$css" = "$want" ] || { __ok=0; __why="${__why}CSS state rules are not the five documented states\n"; }
 }
 
+# tracker-template-section-guard (#652) — the template reads no list through `|| []` (every list goes
+# through arr()), calls each section builder only through guardSection, and that helper holds a
+# try/catch, so one malformed hand-written section cannot stop the rest of the page.
+# mutant:652-items-or-array — puts the `|| []` read back on a section's items list.
+# mutant:652-section-unguarded — calls the hand-written section builder directly, outside the guard.
+# mutant:652-guard-no-catch — reduces the guard to a pass-through with no try/catch.
+case_tracker_template_section_guard() {
+  local f="$root/templates/tracker/index.html" calls helper
+  [ -f "$f" ] || { __ok=0; __why="${__why}template missing\n"; return; }
+  grep -qF -- '|| []' "$f" && { __ok=0; __why="${__why}template reads an array through || []\n"; }
+  calls="$(grep -n 'ectionBlock(' "$f" | grep -v 'function sectionBlock(' | grep -v 'function fileSectionBlock(')"
+  [ -z "$calls" ] || { __ok=0; __why="${__why}a section builder is called outside guardSection\n"; }
+  [ "$(grep -cF -- 'guardSection(sectionBlock, ' "$f")" = "1" ] || { __ok=0; __why="${__why}hand-written sections not built through guardSection\n"; }
+  [ "$(grep -cF -- 'guardSection(fileSectionBlock, ' "$f")" = "1" ] || { __ok=0; __why="${__why}repo-file sections not built through guardSection\n"; }
+  helper="$(sed -n '/^  function guardSection(/,/^  }$/p' "$f")"
+  [ -n "$helper" ] || { __ok=0; __why="${__why}guardSection helper not found\n"; return; }
+  case "$helper" in *'try {'*) ;; *) __ok=0; __why="${__why}guardSection has no try\n" ;; esac
+  case "$helper" in *'catch ('*) ;; *) __ok=0; __why="${__why}guardSection has no catch\n" ;; esac
+}
+
 # tracker-usage — an unknown argument, an extra argument, or no git repository is exit 2 with no
 # stdout.
 case_tracker_usage() {
@@ -14469,6 +14489,7 @@ cases=(
   "tracker-page|case_tracker_page|#622: page mode writes the template with @REPO_NAME@ replaced, for any section state; a bad repo name skips"
   "tracker-template-generic|case_tracker_template_generic|#622: the shipped page has no external resource, localStorage or innerHTML, and keeps its @REPO_NAME@ placeholder"
   "tracker-template-matrix-states|case_tracker_template_matrix_states|#647: the template's matrix state list and its CSS state rules are the same closed set, the five documented states"
+  "tracker-template-section-guard|case_tracker_template_section_guard|#652: the template reads no array through || [] and builds every hand-written and repo-file section through the try/catch guard"
   "tracker-usage|case_tracker_usage|#622: an unknown or extra argument, or no git repository, is exit 2 with no stdout"
   "tracker-recent-window|case_tracker_recent_window|#644: recent lists PRs merged and issues closed within 14 days of checkedAt, newest first; the search carries the window day; a bad date skips"
   "tracker-recent-pr-fields|case_tracker_recent_pr_fields|#644: a recent PR row carries logins, linked issue, ci and verifier, and no display name reaches state.json"
