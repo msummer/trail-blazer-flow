@@ -16,7 +16,26 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.7.0
+
+This minor release makes merging safer where some suites run only after a merge, and grows the
+live tracker. Full auto fixes forward one red default branch per run, and an optional "Post-merge
+CI" section (item 13) makes each merge wait for its push CI (#635). An Autonomy-mode serial train
+uses the same watch, checks the base tip before its first merge and stops on anything but green,
+never fixing forward (#654). Full auto's overlap clause no longer counts the declared changelog
+(#642).
+
+The tracker gains:
+- a health strip with default-branch CI and the verification baseline (#648);
+- "Recently shipped" and "Waiting on you" blocks (#644, #645), with a `governance-path` reason for
+  open PRs only the maintainer can merge, computed by the merge floor's own classifier (#659);
+- sections projected from committed repo files (#646) and a hand-written matrix kind (#647);
+- a `parked` state and repo-declared `label-state:` mappings (#649);
+- an opt-in cycle note built from the run ledger (#650);
+- a page that no longer blanks when one hand-written section is malformed (#652).
+
+Consumer steps (README v3.6.0 → v3.7.0): add the `gh run list` grant, and re-publish an existing
+tracker page to see the new blocks.
 
 - #659: the tracker's open PRs and "Waiting on you" gain a governance-path reason (computed by the
   merge floor's own classifier) for PRs only the maintainer can merge; an unreadable file list
