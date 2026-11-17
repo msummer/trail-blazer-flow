@@ -1246,8 +1246,9 @@ lists it): `red-baseline`, `dirty-tree`, `stop-switch` (the stop switch read `st
 `stop-unknown` (`stop=unknown` or an undocumented exit status), `nothing-to-do` (a standalone
 implementer run with an empty ready list), and the Codex-only `preflight` (any other preflight
 stop after `acquire`) and `permission-denied` (a stop with no issue in hand), and
-`post-merge-ci` (a full-auto run's post-merge CI watch ended `pending` or `unknown`, or its fix
-forward for a CI-detected red stopped). Any other value exits 2 and writes nothing.
+`post-merge-ci` (the serial train's post-merge CI watch (item 13) stopped the run: a malformed
+section, a non-green pre-first-merge check, a `pending` or `unknown` result, a `red` outside a
+full-auto fix forward, or a full-auto fix forward for a CI-detected red stopped). Any other value exits 2 and writes nothing.
 Each line is one JSON object, `"v":1`, with keys in a fixed order: `ts`, `run_id`, `event`
 (`acquire`, `release`, `release-force`, `stage`), `session`, then the event's own keys (`host`,
 `pid`, `harness_version` and, after a stale reclaim, `reclaimed_run_id` on `acquire`; the
