@@ -2,7 +2,7 @@
 #
 # governance-paths.sh — the merge floor's governance-path classifier (#331, folds in #330).
 #
-# Two modes:
+# Three modes:
 #
 #   governance-paths.sh <base-sha> <head-oid>
 #     "Floor mode" — bin/merge-floor.sh's governance-path read. Runs its own
@@ -33,6 +33,19 @@
 #     filesystem, so a symlink is followed as the operating system follows it: this mode does not
 #     apply floor mode's one-hop rule below, and it can report a section as declared for a
 #     CLAUDE.md symlink that floor mode refuses.
+#
+#   governance-paths.sh --paths <file>   (paths, newline-separated, on stdin)
+#     The tracker's display-only mode (bin/tracker-sync.sh): classifies the paths on stdin
+#     against the built-in rules plus the globs declared in FILE's "Governance paths" section
+#     (when it has one), through the same path loop and verdict code floor mode uses, and prints
+#     the same stdout: `governance: <p>` / `changed: <p>` lines in input order, then exactly one
+#     final `verdict=none|lessons-only|hold` line, exit 0. A last path with no trailing newline is
+#     still classified. FILE is read as a plain file through the filesystem (no one-hop rule, no
+#     base-tip read) and the result never decides a merge. It runs no git command and writes no
+#     file. Fail-closed: every failure prints `verdict=error` alone on stdout (no path line) —
+#     exit 2 for an unreadable or missing FILE or a wrong argument count; exit 1 for a malformed
+#     section, empty stdin, a blank line between paths, or a path with a control character (CR
+#     and TAB included).
 #
 # Governance rules (README "The CLAUDE.md contract", item 10). A changed path is governance when
 # EITHER of these fires (declared globs only ever ADD holds — the result is the built-in test OR
@@ -436,6 +449,46 @@ run_check() {
   exit 0
 }
 
+# classify_list — classifies the NUL-delimited paths on its stdin, for floor mode and --paths
+# alike: the callers declare paths_out, total_count and verdict local and this function assigns
+# them. A control character in a path exits through error_out from inside the function, which
+# runs in the caller's shell, so stdout stays buffered until every path is classified.
+classify_list() {
+  local gov_paths="" gov_count=0 p lp is_gov
+  paths_out=""
+  total_count=0
+  while IFS= read -r -d '' p; do
+    total_count=$((total_count + 1))
+    case "$p" in
+      *[[:cntrl:]]*) error_out "a changed path contains a control character" 1 ;;
+    esac
+    lp="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
+    is_gov=false
+    is_builtin "$lp" && is_gov=true
+    if ! $is_gov && is_declared "$lp"; then
+      is_gov=true
+    fi
+    if $is_gov; then
+      paths_out="${paths_out}governance: ${p}
+"
+      gov_paths="${gov_paths}${p}
+"
+      gov_count=$((gov_count + 1))
+    else
+      paths_out="${paths_out}changed: ${p}
+"
+    fi
+  done
+
+  if [ "$gov_count" -eq 0 ]; then
+    verdict="none"
+  elif [ "$gov_count" -eq 1 ] && [ "$gov_paths" = $'.claude/LESSONS.md\n' ]; then
+    verdict="lessons-only"
+  else
+    verdict="hold"
+  fi
+}
+
 # run_floor BASE HEAD — the merge floor's own read. See this file's header for the full stdout
 # grammar and failure-mode list.
 run_floor() {
@@ -474,40 +527,37 @@ run_floor() {
   diff_rc=$?
   [ "$diff_rc" -eq 0 ] || error_out "git diff failed: $diff_err" 1
 
-  local paths_out="" gov_paths="" total_count=0 gov_count=0 p lp is_gov
-  while IFS= read -r -d '' p; do
-    total_count=$((total_count + 1))
-    case "$p" in
-      *[[:cntrl:]]*) error_out "a changed path contains a control character" 1 ;;
-    esac
-    lp="$(printf '%s' "$p" | tr '[:upper:]' '[:lower:]')"
-    is_gov=false
-    is_builtin "$lp" && is_gov=true
-    if ! $is_gov && is_declared "$lp"; then
-      is_gov=true
-    fi
-    if $is_gov; then
-      paths_out="${paths_out}governance: ${p}
-"
-      gov_paths="${gov_paths}${p}
-"
-      gov_count=$((gov_count + 1))
-    else
-      paths_out="${paths_out}changed: ${p}
-"
-    fi
-  done < "$tmp"
+  local paths_out="" total_count=0 verdict
+  classify_list < "$tmp"
 
   [ "$total_count" -gt 0 ] || error_out "git diff printed no paths" 1
 
-  local verdict
-  if [ "$gov_count" -eq 0 ]; then
-    verdict="none"
-  elif [ "$gov_count" -eq 1 ] && [ "$gov_paths" = $'.claude/LESSONS.md\n' ]; then
-    verdict="lessons-only"
-  else
-    verdict="hold"
+  printf '%s' "$paths_out"
+  echo "verdict=$verdict"
+  exit 0
+}
+
+# run_paths FILE — the tracker's display-only read (bin/tracker-sync.sh): classifies the
+# newline-separated paths on stdin against the built-in rules plus the globs FILE declares, with
+# floor mode's own classifier and stdout grammar. It runs no git command and writes no file, and
+# it never decides a merge. See this file's header for the error table.
+run_paths() {
+  local file="$1"
+  [ -f "$file" ] && [ -r "$file" ] || error_out "governance-paths.sh --paths: unreadable file: $file" 2
+  parse_section < "$file"
+  if [ "$gp_state" = "malformed" ]; then
+    error_out "malformed 'Governance paths' section in $file: $gp_reason" 1
   fi
+
+  local content
+  content="$(cat)"
+  case "$NL$content$NL" in
+    *"$NL$NL"*) error_out "empty or blank path on stdin" 1 ;;
+  esac
+
+  local paths_out="" total_count=0 verdict
+  classify_list < <(printf '%s\n' "$content" | tr '\n' '\000')
+  [ "$total_count" -gt 0 ] || error_out "no paths on stdin" 1
 
   printf '%s' "$paths_out"
   echo "verdict=$verdict"
@@ -517,6 +567,11 @@ run_floor() {
 if [ "${1:-}" = "--check" ]; then
   [ "$#" -eq 2 ] || { echo "usage: governance-paths.sh --check <file>" >&2; exit 2; }
   run_check "$2"
+fi
+
+if [ "${1:-}" = "--paths" ]; then
+  [ "$#" -eq 2 ] || error_out "usage: governance-paths.sh --paths <file>" 2
+  run_paths "$2"
 fi
 
 [ "$#" -eq 2 ] || error_out "usage: governance-paths.sh <base-sha> <head-oid>" 2

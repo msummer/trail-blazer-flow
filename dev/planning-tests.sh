@@ -12579,7 +12579,10 @@ exit 1'
 # milestone or none), so a script that ignored the milestone would see another milestone's
 # issues; without --milestone it answers refs.json, the repo-file sections' references query.
 # `issue list --search` (the recent-closed query) serves recent-issues.json whatever the search
-# string, and honours reject-issues-recent. The fixtures' JSON follows the shapes
+# string, and honours reject-issues-recent. `pr list --state open` (the governance-path file read)
+# serves pr-files.json when present, else a derivation from prs.json (each open PR with one
+# plain modified file, unless the PR carries its own changedFiles/files), and honours
+# reject-pr-files. The fixtures' JSON follows the shapes
 # probed on gh 2.102.0: blockedBy is {nodes:[...],totalCount:n}, an open issue's stateReason is "".
 # Bulky inputs (the too-large and truncated fixtures) are built with jq, never hand-typed.
 # #650: the cycle-note cases run the same script in its cycle-note mode through tk_note, which feeds the
@@ -12676,6 +12679,12 @@ case "$1 $2" in
     echo "stub: issue list without a --state" >&2; exit 1 ;;
   "pr list")
     validate_json_fields "$GH_PR_JSON_FIELDS" "$@"
+    case " $* " in
+      *" --state open "*)
+        if fire pr-files; then echo "stub: simulated failure" >&2; exit 1; fi
+        if [ -f "__DIR__/pr-files.json" ]; then cat "__DIR__/pr-files.json"; exit 0; fi
+        jq -c '[.[] | select(.state == "OPEN") | {number, changedFiles: (.changedFiles // 1), files: (.files // [{path:"src/x.txt",additions:1,deletions:0,changeType:"MODIFIED"}])}]' "__DIR__/prs.json"; exit 0 ;;
+    esac
     if fire prs; then echo "stub: simulated failure" >&2; exit 1; fi
     cat "__DIR__/prs.json"; exit 0 ;;
   *) echo "stub: unexpected gh call: $*" >&2; exit 1 ;;
@@ -13907,6 +13916,130 @@ case_tracker_waiting_autonomy() {
   tk_wa $'\n```\n## Plan auto-approval policy\n```\n' "$want"
 }
 
+# tk_gf NUMBER PATH... — one pr-files.json element whose every PATH is a plain MODIFIED file and
+# whose changedFiles is the PATH count.
+tk_gf() {
+  local n="$1"; shift
+  printf '%s\n' "$@" | jq -R -s -c --argjson n "$n" \
+    '[split("\n")[] | select(length > 0)] as $p | {number:$n, changedFiles:($p | length), files:($p | map({path:., additions:1, deletions:0, changeType:"MODIFIED"}))}'
+}
+
+# tracker-governance-path (#659) — an open PR whose changed paths the merge floor's classifier does
+# not clear reads governance-path, between ci-failing and awaiting-review; one cleared by the
+# classifier (built-in rules, a declared glob, case-insensitively) does not. A draft keeps no
+# reasons. A decoy governance-paths.sh earlier on PATH printing verdict=none is never run. The file
+# list is read with one extra call, and no changed path reaches state.json or stdout.
+# mutant:659-gov-hold-cleared — clears a PR whenever the classifier's last line is not
+# verdict=error, so a hold or lessons-only PR loses its reason.
+# mutant:659-gov-reason-order — emits awaiting-review before governance-path in reasons[].
+# mutant:659-gov-path-lookup — resolves the sibling through PATH instead of the script's own
+# directory, so the decoy clears every PR.
+case_tracker_governance_path() {
+  local dir; dir="$(mk_fixture tracker-governance-path)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" 'url: https://example.invalid/artifact/abc'
+  printf '\n## Governance paths\n\n```\ndocs/policies/\n```\n' >> "$dir/work/CLAUDE.md"
+  printf '#!%s\necho verdict=none\nexit 0\n' "$bash_bin" > "$dir/tbin/governance-paths.sh"
+  chmod +x "$dir/tbin/governance-paths.sh"
+  local fail='{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]}'
+  local appr='{"latestReviews":[{"author":{"login":"carol"},"state":"APPROVED"}]}'
+  tk_arr \
+    "$(tk_pr 301 OPEN claude/9-a)" \
+    "$(tk_pr 302 OPEN claude/9-b "$fail")" \
+    "$(tk_pr 303 OPEN claude/9-c "$appr")" \
+    "$(tk_pr 304 OPEN claude/9-d)" \
+    "$(tk_pr 305 OPEN claude/9-e)" \
+    "$(tk_pr 306 OPEN claude/9-f '{"isDraft":true}')" \
+    "$(tk_pr 307 OPEN claude/9-g)" \
+    "$(tk_pr 308 OPEN claude/9-h)" > "$dir/prs.json"
+  tk_arr \
+    "$(tk_gf 301 .github/workflows/ci.yml)" \
+    "$(tk_gf 302 CLAUDE.md)" \
+    "$(tk_gf 303 src/a.c .claude/settings.json)" \
+    "$(tk_gf 304 src/b.c docs/policies-old.md)" \
+    "$(tk_gf 305 .claude/LESSONS.md src/c.c)" \
+    "$(tk_gf 306 .github/x)" \
+    "$(tk_gf 307 docs/policies/a.md)" \
+    "$(tk_gf 308 Docs/ADR/0001.md)" > "$dir/pr-files.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.openPrs[] | [.number, .reasons]]' '[[301,["governance-path","awaiting-review"]],[302,["ci-failing","governance-path","awaiting-review"]],[303,["governance-path"]],[304,["awaiting-review"]],[305,["governance-path","awaiting-review"]],[306,[]],[307,["governance-path","awaiting-review"]],[308,["governance-path","awaiting-review"]]]'
+  tk_jq "$dir" '[.waitingOnYou[] | select(.kind == "pr") | [.number, .reason]]' '[[302,"ci-failing"],[301,"governance-path"],[303,"governance-path"],[305,"governance-path"],[307,"governance-path"],[308,"governance-path"],[304,"awaiting-review"]]'
+  expect_log_count "$dir/.gh-calls" 'pr list --state open --limit 50 --json number,changedFiles,files' 1
+  local p
+  for p in .github/workflows/ci.yml .claude/settings.json docs/policies/a.md Docs/ADR/0001.md docs/policies-old.md; do
+    grep -qF -- "$p" "$(tk_state_file "$dir")" && { __ok=0; __why="${__why}state.json holds a changed path: $p\n"; }
+    grep -qF -- "$p" <<<"$planning_out" && { __ok=0; __why="${__why}stdout holds a changed path: $p\n"; }
+  done
+}
+
+# tracker-governance-unknown (#659) — a file list the tracker cannot trust never clears a PR: a
+# listed count short of changedFiles, a renamed file, a path with a newline, a file with no
+# changeType, no files at all, a PR missing from the result, a PR listed twice. A plain PR reads
+# awaiting-review only (the control), and a malformed Governance paths section in the working-tree
+# CLAUDE.md turns the control into governance-path too.
+# mutant:659-gov-truncated-trusted — drops the files-length-equals-changedFiles test, so a
+# truncated list clears.
+# mutant:659-gov-rename-trusted — accepts RENAMED as a plain change type, so a rename clears.
+# mutant:659-gov-dup-after-shape — drops duplicate PR numbers only after the shape check, so a PR
+# listed twice, once with a truncated list and once with a governance path, reads the invalid copy.
+case_tracker_governance_unknown() {
+  local dir; dir="$(mk_fixture tracker-governance-unknown)"
+  build_tracker_env "$dir"
+  local n
+  for n in 320 321 322 323 324 325 326 327 328; do
+    tk_pr "$n" OPEN claude/9-x
+  done | jq -s -c '.' > "$dir/prs.json"
+  local ok='{"path":"src/ok.c","additions":1,"deletions":0,"changeType":"MODIFIED"}'
+  {
+    tk_gf 320 src/ok.c
+    jq -n -c --argjson f "$ok" '{number:321,changedFiles:2,files:[$f]}'
+    jq -n -c '{number:322,changedFiles:1,files:[{path:"src/new.c",additions:1,deletions:0,changeType:"RENAMED"}]}'
+    jq -n -c '{number:323,changedFiles:1,files:[{path:"src/a\n.c",additions:1,deletions:0,changeType:"MODIFIED"}]}'
+    jq -n -c '{number:324,changedFiles:1,files:[{path:"src/ok.c",additions:1,deletions:0}]}'
+    jq -n -c '{number:325,changedFiles:0,files:[]}'
+    tk_gf 327 src/ok.c
+    tk_gf 327 src/ok.c
+    jq -n -c '{number:328,changedFiles:2,files:[{path:"src/ok.c",additions:1,deletions:0,changeType:"MODIFIED"}]}'
+    tk_gf 328 .github/x
+  } | jq -s -c '.' > "$dir/pr-files.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.openPrs[] | [.number, .reasons[0]]]' '[[320,"awaiting-review"],[321,"governance-path"],[322,"governance-path"],[323,"governance-path"],[324,"governance-path"],[325,"governance-path"],[326,"governance-path"],[327,"governance-path"],[328,"governance-path"]]'
+  printf '\n## Governance paths\n\n```\n!x\n```\n' >> "$dir/work/CLAUDE.md"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.openPrs[0].reasons' '["governance-path","awaiting-review"]'
+}
+
+# tracker-query-failed-pr-files (#659) — a failing governance file read, or one that returns a
+# non-array, skips with the site named, exit 1, and removes a stale state.json.
+# mutant:659-pr-files-fail-open — neutralises both failure arms of the file read, so a failed
+# read builds the snapshot with every PR flagged instead of skipping.
+case_tracker_query_failed_pr_files() {
+  tk_query_failed tracker-query-failed-pr-files pr-files
+  local dir; dir="$(mk_fixture tracker-query-failed-pr-files-shape)"
+  build_tracker_env "$dir"
+  printf '{}\n' > "$dir/pr-files.json"
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=query-failed site=pr-files')" ] || { __ok=0; __why="${__why}stdout: expected skip/pr-files for a non-array, got $planning_out\n"; }
+  tk_no_state "$dir"
+}
+
+# tracker-template-reason-text (#659) — the page's REASON_TEXT keys are exactly the reasons the
+# snapshot builder orders (its $order list), so no reason shows as a raw token.
+# mutant:659-reason-text-drop — deletes the governance-path entry from the template's REASON_TEXT.
+case_tracker_template_reason_text() {
+  local f="$root/templates/tracker/index.html" s="$root/bin/tracker-sync.sh" js order
+  [ -f "$f" ] && [ -f "$s" ] || { __ok=0; __why="${__why}template or script missing\n"; return; }
+  js="$(sed -n '/^  var REASON_TEXT = {$/,/^  };$/p' "$f" | sed -n 's/^    "\([a-z-]*\)":.*/\1/p' | sort)"
+  order="$(sed -n 's/^  | (\[\(.*\)\]) as \$order$/\1/p' "$s" | tr -d ' "' | tr ',' '\n' | sort)"
+  [ -n "$js" ] || { __ok=0; __why="${__why}REASON_TEXT keys not found\n"; return; }
+  [ -n "$order" ] || { __ok=0; __why="${__why}\$order list not found\n"; return; }
+  [ "$js" = "$order" ] || { __ok=0; __why="${__why}REASON_TEXT keys differ from the script's reason order\n"; }
+}
+
 # tracker-query-failed-issues-recent (#644) — a failing recent-closed search, or one that returns a
 # non-array, skips with the site named, exit 1, and removes a stale state.json.
 # mutant:644-recent-fail-open — neutralises both failure arms of the recent-closed query, so a
@@ -14499,6 +14632,10 @@ cases=(
   "tracker-open-prs|case_tracker_open_prs|#645: every open PR is listed on any branch, sorted, with ci-failing and awaiting-review reasons and none for a draft or an approved PR"
   "tracker-waiting-on-you|case_tracker_waiting_on_you|#645: waitingOnYou composes needs-human, ci-failing, awaiting-review, plan-proposed and solo-merge items in reason order"
   "tracker-waiting-autonomy|case_tracker_waiting_autonomy|#645: plan-proposed is suppressed only by a fence-aware auto-approval policy heading or an autonomous Autonomy mode section"
+  "tracker-governance-path|case_tracker_governance_path|#659: an open PR the merge floor's classifier does not clear reads governance-path between ci-failing and awaiting-review, with one extra read and no changed path in the snapshot or stdout"
+  "tracker-governance-unknown|case_tracker_governance_unknown|#659: a truncated, renamed, malformed, missing or duplicated file list, or a malformed Governance paths section, never clears a PR"
+  "tracker-query-failed-pr-files|case_tracker_query_failed_pr_files|#659: a failing or non-array governance file read skips with site=pr-files, removes the stale state.json"
+  "tracker-template-reason-text|case_tracker_template_reason_text|#659: the template's REASON_TEXT keys equal the snapshot builder's reason order"
   "tracker-query-failed-issues-recent|case_tracker_query_failed_issues_recent|#644: a failing or non-array recent-closed search skips, removes the stale state.json"
   "tracker-recent-truncated|case_tracker_recent_truncated|#644: reaching the recent closed-issue limit sets truncated"
   "tracker-malformed-bad-cycle-note|case_tracker_malformed_bad_cycle_note|#650: a cycle-note: value other than on or off, or a repeated key, is bad-cycle-note, checked after bad-section"

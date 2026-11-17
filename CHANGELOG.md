@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #659: the tracker's open PRs and "Waiting on you" gain a governance-path reason (computed by the
+  merge floor's own classifier) for PRs only the maintainer can merge; an unreadable file list
+  counts as governance. Re-publish an existing tracker page to see its label.
 - #652: a hand-written tracker section with a malformed list or phases field no longer blanks the
   rest of the page; a section that still cannot draw shows one muted line. Re-publish an existing
   page to pick this up.

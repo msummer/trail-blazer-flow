@@ -41,7 +41,7 @@
 │   ├── harness-lock.sh            # single-flight lock: at most one active cycle per checkout
 │   ├── harness-version.sh         # prints the installed plugin's "<version> <sha>", one line
 │   ├── harness-stop.sh            # read-only maintainer stop switch: GitHub label or local file (#310)
-│   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
+│   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator + tracker's --paths display read (#331)
 │   ├── merge-floor.sh             # read-only, fail-closed merge floor for one PR: every mechanical check of the issue-cycle merge pass, one verdict + evidence (#550)
 │   ├── reserve-paths.sh           # read-only Autonomy reserve matcher: the diff's reserved paths for the verifier, and the doctor's --check validator + schema-path scan (#552)
 │   ├── tracker-sync.sh            # read-only projection of issue state, PRs, milestones and dependencies into one snapshot file for the tracker skill, and a cycle note document from the dispatch ledger (#622, #650)
