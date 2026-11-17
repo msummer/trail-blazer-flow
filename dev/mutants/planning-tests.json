@@ -1271,6 +1271,36 @@
         "tracker-absent",
         "tracker-no-claude-md"
       ]
+    },
+    {
+      "name": "647-matrix-css-drop",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": ".mx-s[data-m=\"partial\"] { color: var(--wait); border-color: var(--wait); }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-matrix-states"
+      ]
+    },
+    {
+      "name": "647-matrix-vocab-drift",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "\"waiting\", \"none\"];",
+          "to": "\"waiting\", \"stub\", \"none\"];"
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-matrix-states"
+      ]
     }
   ]
 }

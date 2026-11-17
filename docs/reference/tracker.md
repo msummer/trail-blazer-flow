@@ -138,11 +138,19 @@ same URL" and the page path is per checkout.
 - **Hand-written update**, only on request: `sections/<id>` and `people/<id>` documents.
 
 ```
-sections/<id>: {schema:1, title, order:int, kind:"text"|"list"|"phases", text?,
-                items?:[{text, issues?:[n]}], phases?:[{name, text?, issues:[n]}], source?, updated}
+sections/<id>: {schema:1, title, order:int, kind:"text"|"list"|"phases"|"matrix", text?,
+                items?:[{text, issues?:[n]}], phases?:[{name, text?, issues:[n]}],
+                columns?:[string], rows?:[{label, cells:[{state, text?}], issues?:[n]}],
+                legend?:{<state>:string}, source?, updated}
 people/<id>:   {schema:1, title, who?, state:"open"|"in-progress"|"done"|"unconfirmed",
                 note?, issues?:[n], updated}
 ```
+
+A `matrix` section is a status grid. A cell's `state` is one of `good`, `partial`, `bad`, `waiting`
+or `none`, shown in the page's done, waiting, bad, active and muted colours; any other value
+renders as `none`. A cell with no `text` shows its state word (blank for `none`). The page shows at
+most 20 columns, 200 rows, 10 issue links per row and 120 characters per value, and says when it has
+dropped columns or rows. At phone width the grid scrolls sideways inside its card.
 
 The page may change a people item's `state` and `updated` only, and only for a user who can write
 (`user.can("data.write")`, falling back to `user.canEdit()`). Text in these documents is written by

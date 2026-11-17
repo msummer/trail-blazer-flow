@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #647: the tracker gains a matrix section kind, a status grid whose cells show a closed set of
+  coloured states. Hand-written sections only; an existing tracker shows it after its page is
+  re-published.
 - #642: full auto's hard-floor overlap clause no longer counts the declared append-only
   changelog against out-of-scope pending plans.
 
