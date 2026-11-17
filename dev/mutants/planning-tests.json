@@ -1416,8 +1416,8 @@
           "to": "  if [ \"$urls\" -gt 1 ]; then tracker_reason=\"multiple-urls\"; return 0; fi\n  if ! parse_section_values; then tracker_reason=\"bad-section\"; return 0; fi\n"
         },
         {
-          "from": "  if ! parse_section_values; then tracker_reason=\"bad-section\"; return 0; fi\n  tracker_state=\"present\"",
-          "to": "  tracker_state=\"present\""
+          "from": "  if ! parse_section_values; then tracker_reason=\"bad-section\"; return 0; fi\n  if ! parse_label_states",
+          "to": "  if ! parse_label_states"
         }
       ],
       "expect_fail": [
@@ -1639,6 +1639,98 @@
       ],
       "expect_fail": [
         "tracker-waiting-autonomy"
+      ]
+    },
+    {
+      "name": "649-parked-order",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      elif any($l[]; . == $l_th) then \"parked\"\n      elif $m != null then $m\n      elif any($l[]; . == $l_np) then \"held\"\n",
+          "to": "      elif any($l[]; . == $l_np) then \"held\"\n      elif any($l[]; . == $l_th) then \"parked\"\n      elif $m != null then $m\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-label-state",
+        "tracker-state-parked"
+      ]
+    },
+    {
+      "name": "649-mapped-precedence",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      elif any($l[]; . == $l_appr) then \"approved\"\n      elif any($l[]; . == $l_th) then \"parked\"\n      elif $m != null then $m\n",
+          "to": "      elif $m != null then $m\n      elif any($l[]; . == $l_appr) then \"approved\"\n      elif any($l[]; . == $l_th) then \"parked\"\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-label-state"
+      ]
+    },
+    {
+      "name": "649-case-fold",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "([$l[] | tostring | ascii_downcase]) as $ll",
+          "to": "([$l[] | tostring]) as $ll"
+        }
+      ],
+      "expect_fail": [
+        "tracker-label-state"
+      ]
+    },
+    {
+      "name": "649-first-wins",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "| .s] | .[0];",
+          "to": "| .s] | .[-1];"
+        }
+      ],
+      "expect_fail": [
+        "tracker-label-state"
+      ]
+    },
+    {
+      "name": "649-reserved-labels",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "\"$LBL_PROPOSED\"|\"$LBL_APPROVED\"|\"$LBL_PR_OPEN\"|\"$LBL_BLOCKED\"|\"$LBL_NEEDS_HUMAN\"|\"$LBL_NO_PLAN\"|\"$LBL_TRIAGED_HELD\") return 1 ;;",
+          "to": "\"$LBL_PROPOSED\"|\"$LBL_APPROVED\"|\"$LBL_PR_OPEN\"|\"$LBL_BLOCKED\"|\"$LBL_NEEDS_HUMAN\") return 1 ;;"
+        }
+      ],
+      "expect_fail": [
+        "tracker-malformed-bad-label-state"
+      ]
+    },
+    {
+      "name": "649-reason-order",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "  local q=\"'\" dq='\"' bt='`'\n",
+          "to": "  if ! parse_label_states; then tracker_reason=\"bad-label-state\"; return 0; fi\n  local q=\"'\" dq='\"' bt='`'\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-label-state",
+        "tracker-malformed-bad-label-state"
       ]
     }
   ]

@@ -13,13 +13,18 @@
 #
 # THE "TRACKER" SECTION of the working-tree CLAUDE.md: a heading titled exactly "Tracker" (any '#'
 # depth) whose FIRST fenced block holds `url: https://...` and, optionally, up to 8 repeatable
-# `section: <id> <path>#<heading>` lines — blank lines and '#' comment lines are skipped; any other
+# `section: <id> <path>#<heading>` lines and up to 8 repeatable `label-state: <label>=<state>`
+# lines — blank lines and '#' comment lines are skipped; any other
 # line is an unknown key. Exactly one url is required, https, no whitespace, quote, angle bracket
 # or backtick. A section value is an id of 1-40 [a-z0-9-] characters (unique, starting with
 # [a-z0-9]), whitespace, a repo-relative .md path of [A-Za-z0-9._/-] (no leading or trailing '/',
 # no empty, '.' or '..' segment, at most 200 characters), '#', and an exact heading of 1-120
-# characters (no control character, not starting with '#'). No such heading, or no CLAUDE.md,
-# means the repo has no tracker.
+# characters (no control character, not starting with '#'). A label-state value is a
+# label (1-50 characters of [A-Za-z0-9 ._:/+-], trailing whitespace trimmed), '=', and a state that
+# is exactly parked, external or held; the label may not be one the state chain reads itself
+# (plan-proposed, plan-approved, pr-open, impl-blocked, needs-human, no-plan, triaged-held), and
+# no two labels may be equal ignoring ASCII case. No such heading, or no CLAUDE.md, means the repo
+# has no tracker.
 #
 # EXIT CODES: 0 = ready (or absent); 1 = malformed section or skip (a query failed, the snapshot
 # was too large, or it could not be built); 2 = usage or environment error (an unknown argument,
@@ -28,7 +33,7 @@
 # STDOUT, sync mode:
 #   no section:  tracker=absent                      (exit 0; no gh call, nothing written)
 #   malformed:   tracker=malformed, then reason=<no-fence|unknown-key|no-url|multiple-urls|bad-url|
-#                bad-section>, checked in that order (exit 1; no gh call, nothing written)
+#                bad-section|bad-label-state>, checked in that order (exit 1; no gh call, nothing written)
 #   skip:        result=skip, then reason=query-failed site=<repo|milestones|issues-open|
 #                issues-closed|issues-recent|prs|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
 #                reason=build-failed
@@ -63,7 +68,10 @@
 # open issue with no milestone, or whose milestone is closed or not read, is listed with milestone
 # null. Issue state, first match wins: closed and
 # NOT_PLANNED -> not-planned; any other closed -> done; then needs-human > blocked (impl-blocked)
-# > pr-open > approved (plan-approved) > held (no-plan) > planned (plan-proposed) > unplanned.
+# > pr-open > approved (plan-approved) > parked (the triaged-held label) > the state a label-state:
+# line maps one of the issue's labels to (labels compared ignoring ASCII case; the first declared
+# mapping wins; the label names are never stored) > held (no-plan) > planned (plan-proposed) >
+# unplanned.
 # A PR is linked only from a claude/<n>-... head branch (the newest one wins; only the newest 200 PRs are read, and
 # that limit does not set truncated). blockedBy comes
 # from GitHub's native issue dependencies only; waiting is true iff any blocker is open. A
@@ -104,6 +112,7 @@ LBL_PR_OPEN="pr-open"
 LBL_BLOCKED="impl-blocked"
 LBL_NEEDS_HUMAN="needs-human"
 LBL_NO_PLAN="no-plan"
+LBL_TRIAGED_HELD="triaged-held"
 MAX_BYTES=1000000
 BASELINE_MAX_BYTES=65536
 CI_PER_PAGE=100
@@ -111,6 +120,8 @@ OPEN_LIMIT=1000
 CLOSED_LIMIT=500
 PR_LIMIT=200
 MAX_SECTIONS=8
+MAX_LABEL_STATES=8
+MAX_LABEL_LEN=50
 MAX_ROWS=50
 MAX_COLS=8
 MAX_CELL=200
@@ -165,6 +176,12 @@ sec_raw=""
 sec_id=()
 sec_path=()
 sec_head=()
+
+# The declared label-to-state mappings, filled by parse_label_states: one "<lowercased label>TAB
+# <state>" line per mapping, in declaration order. Newline-joined text, never an array.
+ls_n=0
+ls_raw=""
+ls_lines=""
 
 # parse_section_values — validate every collected `section: <id> <path>#<heading>` value, filling
 # sec_id/sec_path/sec_head; returns 1 on the first violation.
@@ -221,6 +238,44 @@ parse_section_values() {
   return 0
 }
 
+# parse_label_states — validate every collected `label-state: <label>=<state>` value, filling
+# ls_lines; returns 1 on the first violation.
+parse_label_states() {
+  local val label st low nl=$'\n' tab=$'\t'
+  [ "$ls_n" -gt 0 ] || return 0
+  [ "$ls_n" -le "$MAX_LABEL_STATES" ] || return 1
+  while IFS= read -r val; do
+    [ -n "$val" ] || continue
+    case "$val" in
+      *=*=*) return 1 ;;
+      *=*) : ;;
+      *) return 1 ;;
+    esac
+    label="${val%%=*}"
+    label="${label%"${label##*[![:space:]]}"}"
+    st="${val#*=}"
+    st="${st#"${st%%[![:space:]]*}"}"
+    [ -n "$label" ] || return 1
+    [ "${#label}" -le "$MAX_LABEL_LEN" ] || return 1
+    case "$label" in
+      *[!A-Za-z0-9\ ._:/+-]*) return 1 ;;
+    esac
+    case "$st" in
+      parked|external|held) : ;;
+      *) return 1 ;;
+    esac
+    low="$(LC_ALL=C tr '[:upper:]' '[:lower:]' <<<"$label")"
+    case "$low" in
+      "$LBL_PROPOSED"|"$LBL_APPROVED"|"$LBL_PR_OPEN"|"$LBL_BLOCKED"|"$LBL_NEEDS_HUMAN"|"$LBL_NO_PLAN"|"$LBL_TRIAGED_HELD") return 1 ;;
+    esac
+    case "$nl$ls_lines" in
+      *"$nl$low$tab"*) return 1 ;;
+    esac
+    ls_lines="$ls_lines$low$tab$st$nl"
+  done <<<"$ls_raw"
+  return 0
+}
+
 parse_section() {
   local cm="$top/CLAUDE.md" section fence line v urls=0 unknown=0
   [ -f "$cm" ] || return 0
@@ -272,11 +327,20 @@ parse_section() {
         sec_count=$((sec_count + 1))
         sec_raw="$sec_raw=$v"$'\n'
         ;;
+      label-state:*)
+        v="${v#label-state:}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+        [ -n "$v" ] || v="="
+        ls_n=$((ls_n + 1))
+        ls_raw="$ls_raw$v"$'\n'
+        ;;
       *) unknown=1 ;;
     esac
   done <<<"$fence"
   # Extension shape for a further key: one case arm above collecting its values, one validator
-  # after parse_section_values that sets its own reason token, and its own parsed variables.
+  # after the previous key's validator that sets its own reason token, and its own parsed
+  # variables (label-state: is the second instance of this shape).
   if [ "$unknown" -eq 1 ]; then tracker_reason="unknown-key"; return 0; fi
   if [ "$urls" -eq 0 ]; then tracker_reason="no-url"; return 0; fi
   if [ "$urls" -gt 1 ]; then tracker_reason="multiple-urls"; return 0; fi
@@ -289,6 +353,7 @@ parse_section() {
     *[[:space:]]*|*[[:cntrl:]]*|*"$q"*|*"$dq"*|*"<"*|*">"*|*"$bt"*) tracker_reason="bad-url"; return 0 ;;
   esac
   if ! parse_section_values; then tracker_reason="bad-section"; return 0; fi
+  if ! parse_label_states; then tracker_reason="bad-label-state"; return 0; fi
   tracker_state="present"
   tracker_reason=""
 }
@@ -759,16 +824,22 @@ jq -n -c \
   --arg nwo "$nwo" --arg branch "$default_branch" --arg sha "$main_sha" --arg at "$checked_at" \
   --argjson trunc "$trunc_shell" \
   --arg l_prop "$LBL_PROPOSED" --arg l_appr "$LBL_APPROVED" --arg l_pro "$LBL_PR_OPEN" \
-  --arg l_blk "$LBL_BLOCKED" --arg l_nh "$LBL_NEEDS_HUMAN" --arg l_np "$LBL_NO_PLAN" '
+  --arg l_blk "$LBL_BLOCKED" --arg l_nh "$LBL_NEEDS_HUMAN" --arg l_np "$LBL_NO_PLAN" \
+  --arg l_th "$LBL_TRIAGED_HELD" --arg lmap "$ls_lines" '
   def lbls: [(.labels // [])[] | .name];
   def tolist: if (. | type) == "array" then . else [] end;
+  def lmap: [$lmap | split("\n")[] | select(length > 0) | split("\t") | {l: .[0], s: .[1]}];
+  def mapped($l): ([$l[] | tostring | ascii_downcase]) as $ll
+    | [lmap[] | select(.l as $x | any($ll[]; . == $x)) | .s] | .[0];
   def state_of:
-    lbls as $l
+    lbls as $l | mapped($l) as $m
     | if .state == "CLOSED" then (if .stateReason == "NOT_PLANNED" then "not-planned" else "done" end)
       elif any($l[]; . == $l_nh) then "needs-human"
       elif any($l[]; . == $l_blk) then "blocked"
       elif any($l[]; . == $l_pro) then "pr-open"
       elif any($l[]; . == $l_appr) then "approved"
+      elif any($l[]; . == $l_th) then "parked"
+      elif $m != null then $m
       elif any($l[]; . == $l_np) then "held"
       elif any($l[]; . == $l_prop) then "planned"
       else "unplanned" end;

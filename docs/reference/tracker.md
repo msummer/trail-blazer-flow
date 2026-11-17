@@ -25,7 +25,7 @@ Three parts:
 ## The "Tracker" section (CLAUDE.md contract item 11)
 
 A heading titled exactly "Tracker" (any `#` depth) whose first fenced block holds the `url:` line
-and, optionally, `section:` lines:
+and, optionally, `section:` and `label-state:` lines:
 
 ````markdown
 ## Tracker
@@ -33,6 +33,7 @@ and, optionally, `section:` lines:
 ```
 url: https://<the artifact's address>
 section: milestones docs/roadmap.md#Milestones
+label-state: waiting-on-vendor=external
 ```
 ````
 
@@ -42,11 +43,12 @@ Blank lines and `#` comment lines inside the fence are skipped; any other line i
 |---|---|---|
 | `url:` | exactly once | starts `https://` and holds no whitespace, control character, quote, angle bracket or backtick (`bad-url` otherwise) |
 | `section:` | 0 to 8 | `<id> <path>#<heading>` (`bad-section` otherwise): an id of 1-40 characters from `a-z0-9-`, starting with `a-z0-9` and unique; whitespace; a repo-relative path of 1-200 characters from `A-Za-z0-9._/-` ending in `.md` (a last segment of exactly `.md` is rejected), with no leading or trailing `/` and no empty, `.` or `..` segment; `#`; and the exact heading text, trimmed, 1-120 characters, with no control character and not starting with `#` |
+| `label-state:` | 0 to 8 | `<label>=<state>` (`bad-label-state` otherwise): a label of 1-50 characters from `A-Za-z0-9 ._:/+-` (a space is allowed; whitespace before the `=` is trimmed), exactly one `=`, and a state that is exactly `parked`, `external` or `held`. The label may not be one the state chain reads itself (`plan-proposed`, `plan-approved`, `pr-open`, `impl-blocked`, `needs-human`, `no-plan`, `triaged-held`), and no two labels may be equal ignoring ASCII case |
 
 No heading, or no `CLAUDE.md`, means the repo has no tracker. A malformed section makes each sync
 print `tracker=malformed` and `reason=<token>` (`no-fence`, `unknown-key`, `no-url`,
-`multiple-urls`, `bad-url`, `bad-section`, checked in the order `unknown-key`,
-`no-url`/`multiple-urls`, `bad-url`, `bad-section`) and skip. The section is read from the working
+`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, checked in the order `unknown-key`,
+`no-url`/`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`) and skip. The section is read from the working
 tree; a `section:` file is read from the default branch at the snapshot's `mainSha`, never from the
 working tree (see "Repo-file sections"). The doctor does not validate it. The section
 is committed, so a wrong URL is a reviewed change; a URL copied from another repo's tracker would
@@ -115,9 +117,21 @@ a milestone's counts. `state`, first match wins:
 3. `impl-blocked` → `blocked`
 4. `pr-open` → `pr-open`
 5. `plan-approved` → `approved`
-6. `no-plan` → `held`
-7. `plan-proposed` → `planned`
-8. otherwise `unplanned`
+6. `triaged-held` → `parked`
+7. a label a `label-state:` line maps → that line's state
+8. `no-plan` → `held`
+9. `plan-proposed` → `planned`
+10. otherwise `unplanned`
+
+A `label-state:` mapping is compared with the issue's labels ignoring ASCII case, and the first
+declared mapping that matches wins. It never overrides a closed issue or items 2 to 6, and always
+overrides `held`, `planned` and `unplanned`. The vocabulary is closed: `waiting` is not in it,
+because `counts.waiting` is the open-blocker count. The mapping is read from the working-tree
+`CLAUDE.md` like the rest of the section, adds no query, and its label names are never stored in
+the snapshot. `counts` holds a `parked` or `external` key only when some issue has that state. A
+label with a character outside the mapping's charset (an emoji, for example) cannot be mapped. A
+page published before this change shows the two new states as muted badges until it is
+re-published.
 
 `pr` is the highest-numbered PR whose head branch is `claude/<n>-...` (the harness's own
 branches); a human-authored PR is not linked there (it still appears in `openPrs`). `blockedBy` is GitHub's native issue dependencies
@@ -231,7 +245,8 @@ those keys, or a page without the blocks, shows no such block; the page needs a 
   `plan-proposed` items are left out when auto-approval is in force: the working-tree `CLAUDE.md`
   (like the "Tracker" section) has a heading titled exactly "Plan auto-approval policy", or an
   "Autonomy mode" heading whose section's first fence has a first `mode:` line with the value
-  `autonomous`. Headings inside fenced blocks are ignored.
+  `autonomous`. Headings inside fenced blocks are ignored. An issue whose state is `parked` or a
+  `label-state:` mapped state is not `planned`, so it is not listed as `plan-proposed`.
 
 Honest limits: `recent` and `openPrs` come from the newest 200 PRs, so an open PR older than
 those is missing. More than 200 closed issues in the window sets `truncated`. The verifier token is

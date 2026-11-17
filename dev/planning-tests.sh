@@ -13200,6 +13200,110 @@ case_tracker_malformed_bad_section() {
   tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\nSection: x')" unknown-key
 }
 
+# tracker-state-parked — the triaged-held label reads parked below approved and above held, so a
+# parked follow-up that also carries no-plan or plan-proposed is parked, plan-approved still wins,
+# and a closed issue keeps its closed state.
+# mutant:649-parked-order — moves the parked arm below the held arm, so triaged-held plus no-plan
+# reads held.
+case_tracker_state_parked() {
+  local dir; dir="$(mk_fixture tracker-state-parked)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_i 40 '["triaged-held","no-plan"]' null)" \
+    "$(tk_i 41 '["triaged-held","plan-proposed"]' null)" \
+    "$(tk_i 42 '["triaged-held","plan-approved"]' null)" \
+    "$(tk_i 43 '["triaged-held"]' null)" > "$dir/open.json"
+  tk_arr "$(tk_i 44 '["triaged-held"]' 1 null CLOSED COMPLETED)" > "$dir/closed.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.issues[] | select(.number >= 40) | [.number, .state]]' '[[40,"parked"],[41,"parked"],[42,"approved"],[43,"parked"],[44,"done"]]'
+  tk_jq "$dir" '.counts.parked' 3
+}
+
+# tracker-label-state — label-state: lines map the repo's own labels to parked, external or held:
+# the label match ignores ASCII case, the first declared mapping wins, a mapping loses to every
+# higher arm (closed, needs-human, blocked, pr-open, approved, parked) and beats held, planned and
+# unplanned. A mapping adds no gh call, leaves the ready stdout unchanged and puts no label name in
+# the snapshot; eight lines are accepted.
+# mutant:649-mapped-precedence — moves the mapped-state arm above the approved arm, so a mapped
+# label beats plan-approved.
+# mutant:649-case-fold — drops the lowercasing of the issue's labels, so a mapping declared with a
+# capital no longer matches.
+# mutant:649-first-wins — takes the last matching mapping instead of the first declared one.
+case_tracker_label_state() {
+  local dir calls1 out1 body fence i st; dir="$(mk_fixture tracker-label-state)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_i 30 '["waiting-on-vendor"]' null)" \
+    "$(tk_i 31 '["on ice","plan-proposed"]' null)" \
+    "$(tk_i 32 '["blocked-upstream","no-plan"]' null)" \
+    "$(tk_i 33 '["waiting-on-vendor","plan-approved"]' null)" \
+    "$(tk_i 34 '["waiting-on-vendor","pr-open"]' null)" \
+    "$(tk_i 35 '["waiting-on-vendor","impl-blocked"]' null)" \
+    "$(tk_i 36 '["waiting-on-vendor","needs-human"]' null)" \
+    "$(tk_i 37 '["waiting-on-vendor","triaged-held"]' null)" \
+    "$(tk_i 38 '["blocked-upstream","waiting-on-vendor"]' null)" \
+    "$(tk_i 29 '["Waiting-On-Vendor"]' null)" \
+    "$(tk_i 39 '["on-ice"]' null)" > "$dir/open.json"
+  tk_arr "$(tk_i 23 '["waiting-on-vendor"]' 1 null CLOSED COMPLETED)" > "$dir/closed.json"
+  body="$(printf 'url: https://example.invalid/artifact/abc\nlabel-state: Waiting-On-Vendor=external\nlabel-state: on ice = held\nlabel-state: blocked-upstream=parked')"
+  tk_claude "$dir" "$body"
+  : > "$dir/.gh-calls"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.issues[] | select(.number >= 29) | [.number, .state]]' '[[29,"external"],[30,"external"],[31,"held"],[32,"parked"],[33,"approved"],[34,"pr-open"],[35,"blocked"],[36,"needs-human"],[37,"parked"],[38,"external"],[39,"unplanned"]]'
+  tk_jq "$dir" '[.issues[] | select(.number == 23) | .state]' '["done"]'
+  tk_jq "$dir" '.counts.external' 3
+  calls1="$(cat "$dir/.gh-calls")"; out1="$planning_out"
+  st="$(cat "$(tk_state_file "$dir")")"
+  case "$st" in
+    *[Ww]aiting-[Oo]n-[Vv]endor*|*blocked-upstream*|*"on ice"*) __ok=0; __why="${__why}state.json holds a mapping label name\n" ;;
+  esac
+  tk_claude "$dir" 'url: https://example.invalid/artifact/abc'
+  : > "$dir/.gh-calls"
+  run_tracker "$dir"
+  expect_rc 0
+  [ "$(cat "$dir/.gh-calls")" = "$calls1" ] || { __ok=0; __why="${__why}gh calls differ with label-state lines\n"; }
+  [ "$planning_out" = "$out1" ] || { __ok=0; __why="${__why}ready stdout differs with label-state lines\n"; }
+  fence='url: https://example.invalid/artifact/abc'
+  for i in 1 2 3 4 5 6 7 8; do fence="$(printf '%s\nlabel-state: l%s=held' "$fence" "$i")"; done
+  tk_claude "$dir" "$fence"
+  run_tracker "$dir"
+  expect_rc 0
+  case "$planning_out" in
+    *result=ready) : ;;
+    *) __ok=0; __why="${__why}eight label-state lines were not accepted\n" ;;
+  esac
+}
+
+# tracker-malformed-bad-label-state — every violation of the label-state value rules is
+# bad-label-state with no network call; it is checked after bad-section, and the earlier reasons
+# keep their order.
+# mutant:649-reserved-labels — drops the rejection of the state chain's own labels, so a mapping
+# can redefine no-plan or triaged-held.
+# mutant:649-reason-order — validates the label states before the url, so a bad url next to a bad
+# label-state reads bad-label-state.
+case_tracker_malformed_bad_label_state() {
+  local v i fence long u='url: https://example.invalid/a'
+  long="$(awk 'BEGIN { for (i = 0; i < 51; i++) printf "a" }')"
+  for v in 'label-state: x' 'label-state: =parked' 'label-state: x=' 'label-state: x=waiting' 'label-state: x=done' \
+      'label-state: x=Parked' 'label-state: a=b=parked' 'label-state: x"y=parked' 'label-state: x<y=parked' \
+      "label-state: x	y=parked" "label-state: $long=parked" 'label-state: no-plan=parked' \
+      'label-state: Triaged-Held=held' 'label-state: plan-proposed=held' 'label-state: PR-open=held' \
+      'label-state: impl-blocked=held' 'label-state: needs-human=held' 'label-state: plan-approved=held' \
+      'label-state:'; do
+    tk_malformed tracker-malformed-bad-label-state "$(printf '%s\n%s' "$u" "$v")" bad-label-state
+  done
+  tk_malformed tracker-malformed-bad-label-state "$(printf '%s\nlabel-state: x=parked\nlabel-state: X=held' "$u")" bad-label-state
+  fence="$u"
+  for i in 1 2 3 4 5 6 7 8 9; do fence="$(printf '%s\nlabel-state: l%s=held' "$fence" "$i")"; done
+  tk_malformed tracker-malformed-bad-label-state "$fence" bad-label-state
+  tk_malformed tracker-malformed-bad-label-state "$(printf 'url: http://example.invalid/a\nlabel-state: x')" bad-url
+  tk_malformed tracker-malformed-bad-label-state "$(printf '%s\nsection: a\nlabel-state: x' "$u")" bad-section
+  tk_malformed tracker-malformed-bad-label-state "$(printf '%s\nLabel-State: x=parked' "$u")" unknown-key
+  tk_malformed tracker-malformed-bad-label-state "$(printf 'label-state: x')" no-url
+}
+
 # tracker-section-none — no section line: no tree, blob or references call, empty sections and
 # refs, and no warn line.
 case_tracker_section_none() {
@@ -14106,6 +14210,9 @@ cases=(
   "tracker-query-failed-issues-refs|case_tracker_query_failed_issues_refs|#646: a failing references query skips with site=issues-refs, removes the stale state.json"
   "tracker-section-bad-blob|case_tracker_section_bad_blob|#646: a blob that is not base64 or does not decode skips with site=section"
   "tracker-malformed-bad-section|case_tracker_malformed_bad_section|#646: every section value violation is bad-section with no gh call; reasons are checked in the documented order"
+  "tracker-state-parked|case_tracker_state_parked|#649: triaged-held reads parked below approved and above held; a closed issue keeps its closed state"
+  "tracker-label-state|case_tracker_label_state|#649: label-state lines map labels case-insensitively below parked and above held, add no query and store no label name"
+  "tracker-malformed-bad-label-state|case_tracker_malformed_bad_label_state|#649: every label-state value violation is bad-label-state with no query; reasons keep their documented order"
   "tracker-section-none|case_tracker_section_none|#646: no section line means no tree, blob or references call, empty sections and refs, no warn line"
   "tracker-section-table|case_tracker_section_table|#646: the first table under the exact heading is read from the committed blob, with escaped pipes, padded and cut rows"
   "tracker-section-list|case_tracker_section_list|#646: a list is projected with folded continuation and nested items, loose and ordered lists, CRLF and tabs"

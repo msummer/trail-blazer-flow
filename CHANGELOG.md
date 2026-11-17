@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #649: the tracker shows `triaged-held` issues as `parked`, and a `label-state: <label>=<state>`
+  Tracker key maps a repo's own labels to `parked`, `external` or `held`. Re-publish an existing
+  tracker page to see the new badge colours.
 - #644, #645: the tracker shows what shipped in the last 14 days (flagging merges with no second
   review) and a "Waiting on you" block, including open PRs that link to no issue. Re-publish an
   existing tracker page to see them.
