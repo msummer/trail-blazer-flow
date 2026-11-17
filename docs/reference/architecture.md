@@ -27,6 +27,7 @@
 │   ├── issue-implementer/references/wording-fast-path.md  # verifier wording-only fix round (read on demand)
 │   ├── issue-cycle/SKILL.md      # steady-state loop: cleanup → plan → implement → status report
 │   ├── issue-cycle/references/full-auto.md  # one-run full-auto procedure (read on demand)
+│   ├── issue-cycle/references/cycle-note.md  # opt-in tracker cycle note push procedure (read on demand, #650)
 │   ├── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
 │   └── tracker/SKILL.md          # optional live tracker: creates the artifact page and syncs it; orchestrating session only (#622)
 ├── bin/                          # on the Bash PATH when the plugin is enabled, on Claude Code — never on Codex (#408, ADR 0002 P5)
@@ -43,7 +44,7 @@
 │   ├── governance-paths.sh        # merge floor's governance-path classifier + doctor's --check validator (#331)
 │   ├── merge-floor.sh             # read-only, fail-closed merge floor for one PR: every mechanical check of the issue-cycle merge pass, one verdict + evidence (#550)
 │   ├── reserve-paths.sh           # read-only Autonomy reserve matcher: the diff's reserved paths for the verifier, and the doctor's --check validator + schema-path scan (#552)
-│   ├── tracker-sync.sh            # read-only projection of issue state, PRs, milestones and dependencies into one snapshot file for the tracker skill (#622)
+│   ├── tracker-sync.sh            # read-only projection of issue state, PRs, milestones and dependencies into one snapshot file for the tracker skill, and a cycle note document from the dispatch ledger (#622, #650)
 │   ├── changelog-merge.sh         # full auto's changelog route: reads the "Append-only changelog" section, and builds a merge-from-base commit (git objects only) that settles a lane's one inserted changelog block (#631)
 │   ├── codex-setup.sh             # installs the Codex compatibility layer into a repo: agent TOMLs, rules, contract loading (#408)
 │   ├── codex-scheduled-run.sh     # launchd-driven codex exec wrapper: preflight, timeout, local run records (#427), a deduplicated needs-human tracking issue on failure (#428)

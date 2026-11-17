@@ -1277,6 +1277,7 @@
       ],
       "expect_fail": [
         "tracker-absent",
+        "tracker-cycle-note-off",
         "tracker-no-claude-md"
       ]
     },
@@ -1731,6 +1732,100 @@
       "expect_fail": [
         "tracker-label-state",
         "tracker-malformed-bad-label-state"
+      ]
+    },
+    {
+      "name": "650-key-once",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "cycle-note",
+      "edits": [
+        {
+          "from": "if [ \"$cnotes\" -gt 1 ]; then",
+          "to": "if [ \"$cnotes\" -gt 99 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "tracker-malformed-bad-cycle-note"
+      ]
+    },
+    {
+      "name": "650-default-on",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "cycle-note",
+      "edits": [
+        {
+          "from": "tracker_cycle_note=\"off\"",
+          "to": "tracker_cycle_note=\"on\""
+        }
+      ],
+      "expect_fail": [
+        "tracker-cycle-note-off"
+      ]
+    },
+    {
+      "name": "650-outcome-vocab",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "cycle-note",
+      "edits": [
+        {
+          "from": "else if (st == \"planner\") ok = (oc == \"-\" || inset(oc, pl))",
+          "to": "else if (st == \"planner\") ok = 1"
+        }
+      ],
+      "expect_fail": [
+        "tracker-cycle-note-reject"
+      ]
+    },
+    {
+      "name": "650-unknown-token",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "cycle-note",
+      "edits": [
+        {
+          "from": "    else ok = 0\n  }\n  if (!ok)",
+          "to": "    else ok = 1\n  }\n  if (!ok)"
+        }
+      ],
+      "expect_fail": [
+        "tracker-cycle-note-reject"
+      ]
+    },
+    {
+      "name": "650-stale-note",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "cycle-note",
+      "edits": [
+        {
+          "from": "  rm -f \"$dir/last-cycle.json\"\n",
+          "to": "  :\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-cycle-note-reject"
+      ]
+    },
+    {
+      "name": "650-run-id",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "cycle-note",
+      "edits": [
+        {
+          "from": "    *) skip \"bad-run-id\" ;;",
+          "to": "    *) : ;;"
+        },
+        {
+          "from": "note_suffix=\"${note_run_id#run-????????T??????Z-}\"",
+          "to": "note_suffix=\"1\""
+        }
+      ],
+      "expect_fail": [
+        "tracker-cycle-note-reject"
       ]
     }
   ]

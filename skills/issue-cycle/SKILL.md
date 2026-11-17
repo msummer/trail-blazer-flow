@@ -50,9 +50,9 @@ summed per stage), wall-clock duration (`unknown` if no clock), final state, esc
   column per issue touched, from the outcome each dispatch reports via the status line contract
   (issue-implementer's "Resilient dispatch"); the ratchet pass fills in nothing (step 4).
 - **Serialized form:** step 5 hands it to `reconcile-ledger.sh` as one record per line —
-  `<issue> <stage> <outcome> [retries] [deploy=<slug>]` (format/vocabulary owned by that script —
-  see its header / `--help`; the `deploy` field is merge-only, from guard (e)). A stage never
-  reached is absent, never a `-` row.
+  `<issue> <stage> <outcome> [retries] [deploy=<slug>] [pr=<n>]` (format/vocabulary owned by that
+  script — see its header / `--help`; `deploy` is merge-only, from guard (e); `pr`, the PR number,
+  only on implementer/merge plain records). A stage never reached is absent, never a `-` row.
 - **Pre-advance check:** before advancing an issue, check the ledger — a stage with no entry is
   **launched, not assumed**; never infer "must have been fine" from an empty cell. **Closing
   reconciliation (step 5):** `reconcile-ledger.sh` then compares the serialized ledger against
@@ -390,8 +390,9 @@ pre-flight discovery output, in which case the seed step missed it: escalate tha
 found → fall back to comparing the ledger against the JSON by hand, same criteria.
 
 **Tracker sync (best-effort).** Run the `tracker` skill's Sync procedure; it is silent without a
-"Tracker" section and prints one skip line where it cannot run (Codex, headless). Put its lines
-in "what this cycle did"; it never fails, stops or delays the run. Not run on the step-0 stop path.
+"Tracker" section and prints one skip line where it cannot run (Codex, headless). Then, if that
+fence holds `cycle-note: on`, follow `references/cycle-note.md` (next to this SKILL.md). Put their
+lines in "what this cycle did"; neither fails, stops or delays the run. Not run on the step-0 stop path.
 
 **Per-issue summary table**, before the two-halves report: issue, planned / implemented /
 verified / merged (outcome or "—"), retries, duration, final state, escalations.
