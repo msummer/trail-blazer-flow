@@ -67,8 +67,9 @@
 # permissions.defaultMode PASS reporting a validated bare word (or "(unset)"/"(unrecognised
 # value)") per settings file read — never an allow/deny entry, from any of the three files,
 # including the user-level one, and (#331, folds in #330) bin/governance-paths.sh — the merge
-# floor's governance-path classifier — run directly in both its floor mode (base/head object ids)
-# and its --check mode (a CLAUDE.md's "Governance paths" section), pinning the built-in rules,
+# floor's governance-path classifier — run directly in its floor mode (base/head object ids), its
+# --check mode (a CLAUDE.md's "Governance paths" section) and its --paths mode (the tracker's
+# display-only read of paths on stdin, with stdout parity to floor mode), pinning the built-in rules,
 # --no-renames, the declared-glob grammar (only the first fenced block, comment/blank lines
 # skipped, case-insensitive, final-segment vs whole-path matching, trailing-slash-means-beneath),
 # the add-only OR of built-in and declared, the base-tip-only read, the lessons-only exact-set
@@ -910,6 +911,22 @@ run_gov() {
   shift
   outfile="$(mktemp)"; errfile="$(mktemp)"
   (cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$root/bin/governance-paths.sh" "$@") >"$outfile" 2>"$errfile"
+  gov_rc=$?
+  gov_out="$(cat "$outfile")"
+  gov_err="$(cat "$errfile")"
+  rm -f "$outfile" "$errfile"
+  doctor_out="OUT: $gov_out
+ERR: $gov_err"
+  doctor_rc=$gov_rc
+}
+
+# run_gov_in DIR INPUT_FILE ARGS… (#659) — run_gov's twin for the --paths mode: the same isolation
+# and the same $gov_out/$gov_err/$gov_rc/$doctor_out globals, with stdin read from INPUT_FILE.
+run_gov_in() {
+  local dir="$1" input="$2" outfile errfile
+  shift 2
+  outfile="$(mktemp)"; errfile="$(mktemp)"
+  (cd "$dir" && HOME="$dir/home" XDG_CONFIG_HOME="$dir/home/.config" GIT_CONFIG_NOSYSTEM=1 "$bash_bin" "$root/bin/governance-paths.sh" "$@") <"$input" >"$outfile" 2>"$errfile"
   gov_rc=$?
   gov_out="$(cat "$outfile")"
   gov_err="$(cat "$errfile")"
@@ -3302,6 +3319,126 @@ case_governance_bracket_sed_fails() {
   expect_rc 0
   res_expect_exact "control floor" "changed: pages/i.tsx
 verdict=none" "$gov_out"
+}
+
+# governance-paths-mode-verdicts (#659) — the --paths mode, in a plain non-git directory with a
+# booby-trapped git first on PATH (the sentinel must stay absent: it runs no git command): built-in
+# rules alone, a declared glob from FILE, the input order of the output lines, the lessons-only
+# verdict, a last path with no trailing newline, and parity — the same path list through floor mode
+# (a repo diff) and through --paths with that repo's CLAUDE.md prints byte-identical stdout.
+# mutant:659-paths-last-line — feeds the classifier the paths without a closing newline, so the
+# last path is never read and the verdict, or the whole list, goes missing.
+case_governance_paths_mode_verdicts() {
+  local dir trap sentinel in
+  dir="$tmpbase/governance-paths-mode-verdicts"
+  trap="$dir/trap-bin"
+  sentinel="$dir/sentinel-touched"
+  in="$dir/input.txt"
+  mkdir -p "$trap" "$dir/home"
+  { printf '#!%s\n' "$bash_bin"; printf 'touch %s\n' "$sentinel"; } > "$trap/git"
+  chmod +x "$trap/git"
+  printf '# CLAUDE.md\n\nNo section.\n' > "$dir/plain.md"
+  printf '# CLAUDE.md\n\n## Governance paths\n```\ndocs/policies/\n```\n' > "$dir/declared.md"
+  printf 'src/a\n' > "$in"
+  PATH="$trap:$PATH" run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 0
+  res_expect_exact "none" "changed: src/a
+verdict=none" "$gov_out"
+  printf 'src/a\n.github/x.yml\n' > "$in"
+  PATH="$trap:$PATH" run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 0
+  res_expect_exact "hold" "changed: src/a
+governance: .github/x.yml
+verdict=hold" "$gov_out"
+  printf '.claude/LESSONS.md\nsrc/a\n' > "$in"
+  PATH="$trap:$PATH" run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 0
+  res_expect_exact "lessons-only" "governance: .claude/LESSONS.md
+changed: src/a
+verdict=lessons-only" "$gov_out"
+  printf 'docs/policies/a.md\n' > "$in"
+  PATH="$trap:$PATH" run_gov_in "$dir" "$in" --paths "$dir/declared.md"
+  expect_rc 0
+  res_expect_exact "declared glob" "governance: docs/policies/a.md
+verdict=hold" "$gov_out"
+  PATH="$trap:$PATH" run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  res_expect_exact "glob not declared" "changed: docs/policies/a.md
+verdict=none" "$gov_out"
+  printf 'src/a\n.github/x' > "$in"
+  PATH="$trap:$PATH" run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 0
+  res_expect_exact "no trailing newline" "changed: src/a
+governance: .github/x
+verdict=hold" "$gov_out"
+  expect_no_file "$sentinel"
+
+  local repo base head floor_out
+  repo="$(mk_gov_repo governance-paths-mode-parity)"
+  mkdir -p "$repo/home"
+  cp "$dir/declared.md" "$repo/CLAUDE.md"
+  base="$(gov_commit "$repo")"
+  mkdir -p "$repo/src" "$repo/.github" "$repo/docs/policies" "$repo/Docs"
+  printf 'x\n' > "$repo/src/a"
+  printf 'x\n' > "$repo/.github/x.yml"
+  printf 'x\n' > "$repo/docs/policies/a.md"
+  printf 'x\n' > "$repo/Docs/Readme"
+  head="$(gov_commit "$repo")"
+  run_gov "$repo" "$base" "$head"
+  expect_rc 0
+  floor_out="$gov_out"
+  grep -v '^verdict=' <<<"$floor_out" | sed 's/^[a-z]*: //' > "$in"
+  run_gov_in "$repo" "$in" --paths "$repo/CLAUDE.md"
+  expect_rc 0
+  res_expect_exact "parity" "$floor_out" "$gov_out"
+  expect_gov_last "verdict=hold"
+}
+
+# governance-paths-mode-errors (#659) — every --paths failure prints verdict=error alone on stdout
+# and no path line: empty stdin, an inner blank line, a CR or TAB in a path and a malformed section
+# exit 1 (the section's reason on stderr, never the glob); a missing FILE and a wrong argument
+# count exit 2.
+# mutant:659-paths-empty-ok — deletes the empty-or-blank-input error, so empty stdin or a blank
+# line is classified as an empty path.
+# mutant:659-paths-malformed-ignored — deletes run_paths's malformed-section error, so a section
+# --check calls malformed is read as no globs.
+case_governance_paths_mode_errors() {
+  local dir in
+  dir="$tmpbase/governance-paths-mode-errors"
+  in="$dir/input.txt"
+  mkdir -p "$dir/home"
+  printf '# CLAUDE.md\n\nNo section.\n' > "$dir/plain.md"
+  printf '# CLAUDE.md\n\n## Governance paths\n```\n!secret-glob\n```\n' > "$dir/negation.md"
+  : > "$in"
+  run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 1
+  res_expect_exact "empty stdin" "verdict=error" "$gov_out"
+  printf 'src/a\n\nsrc/b\n' > "$in"
+  run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 1
+  res_expect_exact "blank line" "verdict=error" "$gov_out"
+  printf 'src/a\r\nsrc/b\n' > "$in"
+  run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 1
+  res_expect_exact "CR" "verdict=error" "$gov_out"
+  printf 'src/a\nsrc\tb\n' > "$in"
+  run_gov_in "$dir" "$in" --paths "$dir/plain.md"
+  expect_rc 1
+  res_expect_exact "TAB" "verdict=error" "$gov_out"
+  printf 'src/a\n' > "$in"
+  run_gov_in "$dir" "$in" --paths "$dir/negation.md"
+  expect_rc 1
+  res_expect_exact "negation" "verdict=error" "$gov_out"
+  expect_gov_err "negation"
+  case "$gov_err" in *secret-glob*) __ok=0; __why="${__why}stderr echoes a declared glob\n" ;; esac
+  run_gov_in "$dir" "$in" --paths "$dir/no-such-file.md"
+  expect_rc 2
+  res_expect_exact "missing FILE" "verdict=error" "$gov_out"
+  run_gov_in "$dir" "$in" --paths
+  expect_rc 2
+  res_expect_exact "no FILE" "verdict=error" "$gov_out"
+  run_gov_in "$dir" "$in" --paths "$dir/plain.md" extra
+  expect_rc 2
+  res_expect_exact "extra argument" "verdict=error" "$gov_out"
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -9936,6 +10073,8 @@ cases=(
   "governance-route-brackets|case_governance_route_brackets|#595: governance-paths.sh: a route-parameter bracket group ([id], [...slug], [[id]], [[...slug]]) in a declared glob matches literally, never as a character class; * and ? keep their meaning beside a group; a bracket in a comment line is ignored"
   "governance-bracket-malformed|case_governance_bracket_malformed|#595: governance-paths.sh: a bracket outside a route-parameter group, or a backslash in an entry holding a bracket, makes the whole section malformed -> --check prints malformed bracket, floor mode verdict=error rc 1 alone on stdout, stderr names bracket and never the entry"
   "governance-bracket-sed-fails|case_governance_bracket_sed_fails|#595: governance-paths.sh: a sed that exits 2 while checking an entry's brackets, or while rewriting them as literals, makes the section malformed (bracket) in both modes, never declared"
+  "governance-paths-mode-verdicts|case_governance_paths_mode_verdicts|#659: governance-paths.sh --paths: built-in and declared rules, input-order lines, lessons-only, a last path with no trailing newline, no git run, and stdout byte-identical to floor mode for the same paths"
+  "governance-paths-mode-errors|case_governance_paths_mode_errors|#659: governance-paths.sh --paths: empty stdin, a blank line, a CR or TAB in a path and a malformed section exit 1, a missing FILE or wrong argument count exit 2, each with verdict=error alone on stdout"
   "reserve-dialect|case_reserve_dialect|#552: reserve-paths.sh diff mode: one base section with every dialect clause (case fold, unanchored any-depth match, * crossing /, trailing-slash and **/ forms, segment alignment, literal route brackets, a not reserved: line ignored) and a head with one path per clause plus a rename out of a reserved directory -> exactly the reserved paths print, in diff order"
   "reserve-none|case_reserve_none|#552: reserve-paths.sh diff mode: a declared section that matches nothing that changed -> verdict=none alone, empty stderr"
   "reserve-absent|case_reserve_absent|#552: reserve-paths.sh: no section, or no CLAUDE.md, at the base -> verdict=absent alone, rc 0; --check on a section-less file prints absent"

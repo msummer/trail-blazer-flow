@@ -38,7 +38,7 @@
 #                bad-section|bad-label-state|bad-cycle-note>, checked in that order (exit 1; no gh
 #                call, nothing written)
 #   skip:        result=skip, then reason=query-failed site=<repo|milestones|issues-open|
-#                issues-closed|issues-recent|prs|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
+#                issues-closed|issues-recent|prs|pr-files|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
 #                reason=build-failed
 #                (exit 1; no state.json is left behind — a stale one from an earlier run is removed)
 #   ready (exit 0), in this order: tracker=present, url=<url>, dir=<dir>, file=<dir>/state.json,
@@ -108,11 +108,21 @@
 # body whose issue equals the linked issue, else null; no other body text is kept. soloMerge is
 # true iff author and merger are the same login and no other login's latest review APPROVED.
 # openPrs[] lists every open PR, any branch or author, with reasons[] (ci-failing, then
-# awaiting-review; none for a draft). waitingOnYou[] is {kind,number,reason} sorted by reason in
-# the order needs-human, ci-failing, awaiting-review, plan-proposed, solo-merge, then number;
+# governance-path, then awaiting-review; none for a draft). waitingOnYou[] is {kind,number,reason}
+# sorted by reason in the order needs-human, ci-failing, governance-path, awaiting-review,
+# plan-proposed, solo-merge, then number;
 # plan-proposed is omitted when CLAUDE.md has a "Plan auto-approval policy" heading or an
 # "Autonomy mode" section whose first fence's first mode: line is autonomous. Reaching the 200
 # recent closed issues sets truncated; the PR read limit still does not.
+# GOVERNANCE PATH (#659): one more list query reads the changed paths of the newest 50 open PRs.
+# They go through the merge floor's classifier (governance-paths.sh --paths, resolved from this
+# script's own directory only, with the declared globs of the working-tree CLAUDE.md; the sibling
+# reads that file and stdin only). A PR is cleared of the reason only when it appears once, its
+# file list is complete (length equals changedFiles, above zero) and well-formed (a non-empty
+# path with no control character, a plain changeType) and the classifier exits 0 with
+# verdict=none. A truncated or renamed-file list, a PR past the 50, lessons-only, hold, an
+# error or a missing sibling all leave governance-path on. A failed or non-array query is
+# site=pr-files. No path is stored or printed.
 
 set -uo pipefail
 
@@ -129,6 +139,8 @@ CI_PER_PAGE=100
 OPEN_LIMIT=1000
 CLOSED_LIMIT=500
 PR_LIMIT=200
+GOV_PR_LIMIT=50
+GOV_FIELDS="number,changedFiles,files"
 MAX_SECTIONS=8
 MAX_LABEL_STATES=8
 MAX_LABEL_LEN=50
@@ -614,6 +626,40 @@ if ! out="$(gh pr list --state all --limit "$PR_LIMIT" --json "$PR_FIELDS" 2>/de
 printf '%s\n' "$out" > "$work/prs.json"
 jq -e 'type == "array"' "$work/prs.json" >/dev/null 2>&1 || q_fail prs
 
+# --- governance-path read (#659): one list query for every open PR's changed paths, classified by
+# the merge floor's own classifier (governance-paths.sh --paths) as a display-only hint. A PR is
+# cleared (no governance-path reason) only when its file list is complete and well-formed and the
+# classifier prints verdict=none; every other outcome leaves the reason on. Paths go to jq as data
+# and to the classifier's stdin only; none is stored, printed or put in argv.
+if ! out="$(gh pr list --state open --limit "$GOV_PR_LIMIT" --json "$GOV_FIELDS" </dev/null 2>/dev/null)"; then q_fail pr-files; fi
+printf '%s\n' "$out" > "$work/pr-files.json"
+jq -e 'type == "array"' "$work/pr-files.json" >/dev/null 2>&1 || q_fail pr-files
+GOV_JQ='
+  [.[] | objects] | group_by(.number) | map(select(length == 1) | .[0])
+  | .[]
+  | select((.number | type) == "number" and (.number | floor) == .number and .number > 0
+           and (.changedFiles | type) == "number" and (.files | type) == "array"
+           and (.files | length) == .changedFiles and .changedFiles > 0
+           and all(.files[];
+                   type == "object"
+                   and (.path | type) == "string" and (.path | length) > 0
+                   and ((.path | explode | any(. < 32 or . == 127)) | not)
+                   and ((.changeType // "") | IN("ADDED", "MODIFIED", "DELETED", "CHANGED", "COPIED"))))
+  | .number'
+gov_candidates="$(jq -r "$GOV_JQ" "$work/pr-files.json" 2>/dev/null)" || skip "build-failed"
+gov_clear=""
+for gn in $gov_candidates; do
+  case "$gn" in ""|*[!0-9]*) skip "build-failed" ;; esac
+  gpaths="$(jq -r --argjson n "$gn" 'first(.[] | objects | select(.number == $n)) | .files[].path' "$work/pr-files.json" 2>/dev/null)" || skip "build-failed"
+  gv="$(printf '%s\n' "$gpaths" | "$script_dir/governance-paths.sh" --paths "$top/CLAUDE.md" 2>/dev/null)"
+  grc=$?
+  glast="$(printf '%s\n' "$gv" | tail -n 1)"
+  if [ "$grc" -eq 0 ] && [ "$glast" = "verdict=none" ]; then
+    gov_clear="$gov_clear $gn"
+  fi
+done
+jq -n -c --arg s "$gov_clear" '[$s | splits(" +") | select(length > 0) | tonumber]' > "$work/gov-clear.json" || skip "build-failed"
+
 if ! out="$(gh api "repos/$nwo/branches/$default_branch" 2>/dev/null)"; then q_fail branch; fi
 printf '%s\n' "$out" > "$work/branch.json"
 main_sha="$(jq -r '.commit.sha // empty' "$work/branch.json" 2>/dev/null)"
@@ -1062,8 +1108,9 @@ ACTIVITY_JQ='
       | if length == 0 then null else (last | .o) end)
     end;
   ($prs[0] | tolist) as $praw
+  | ($gclear[0] | tolist) as $clear
   | ($ri[0] | tolist) as $iraw
-  | (["needs-human", "ci-failing", "awaiting-review", "plan-proposed", "solo-merge"]) as $order
+  | (["needs-human", "ci-failing", "governance-path", "awaiting-review", "plan-proposed", "solo-merge"]) as $order
   | ([$praw[]
       | select(.state == "MERGED" and ((.mergedAt | type) == "string") and .mergedAt >= $cut)
       | linked as $n
@@ -1080,11 +1127,13 @@ ACTIVITY_JQ='
       | linked as $n
       | (.author | login) as $a
       | ci_of as $ci
+      | .number as $pn
       | (.isDraft == true) as $d
       | {number: .number, title: (.title // ""), url: .url, author: $a, headRefName: (.headRefName // ""),
          issue: $n, draft: $d, ci: $ci,
          reasons: (if $d then []
                    else [(if $ci == "failing" then "ci-failing" else empty end),
+                         (if any($clear[]; . == $pn) then empty else "governance-path" end),
                          (if approved_by_other($a) then empty else "awaiting-review" end)] end)}]
       | sort_by(.number)) as $open
   | ([.issues[] | select(.state == "needs-human") | {kind: "issue", number: .number, reason: "needs-human"}]
@@ -1098,6 +1147,7 @@ ACTIVITY_JQ='
          waitingOnYou: $wait}
   | .truncated = (.truncated or $rtrunc)'
 jq -c --slurpfile prs "$work/prs.json" --slurpfile ri "$work/recent.json" \
+  --slurpfile gclear "$work/gov-clear.json" \
   --arg cut "$recent_since" --argjson auto "$auto_appr" --argjson rtrunc "$recent_trunc" \
   "$ACTIVITY_JQ" "$work/state.json" > "$work/state2.json" || skip "build-failed"
 mv "$work/state2.json" "$work/state.json" || skip "build-failed"

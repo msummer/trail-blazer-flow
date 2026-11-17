@@ -2128,6 +2128,52 @@
       ]
     },
     {
+      "name": "659-paths-last-line",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-paths-mode",
+      "edits": [
+        {
+          "from": "printf '%s\\n' \"$content\" | tr",
+          "to": "printf '%s' \"$content\" | tr"
+        }
+      ],
+      "expect_fail": [
+        "governance-paths-mode-errors",
+        "governance-paths-mode-verdicts"
+      ]
+    },
+    {
+      "name": "659-paths-empty-ok",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-paths-mode",
+      "edits": [
+        {
+          "from": "  case \"$NL$content$NL\" in\n    *\"$NL$NL\"*) error_out \"empty or blank path on stdin\" 1 ;;\n  esac\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "governance-paths-mode-errors"
+      ]
+    },
+    {
+      "name": "659-paths-malformed-ignored",
+      "target": "bin/governance-paths.sh",
+      "suite": "dev/doctor-tests.sh",
+      "filter": "governance-paths-mode",
+      "edits": [
+        {
+          "from": "  if [ \"$gp_state\" = \"malformed\" ]; then\n    error_out \"malformed 'Governance paths' section in $file: $gp_reason\" 1\n  fi\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "governance-paths-mode-errors"
+      ]
+    },
+    {
       "name": "595-gov-bracket-sed",
       "target": "bin/governance-paths.sh",
       "suite": "dev/doctor-tests.sh",

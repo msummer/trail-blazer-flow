@@ -71,7 +71,7 @@ Sync prints, one `key=value` per line:
 | no section | `tracker=absent` (no `gh` call, nothing written) |
 | malformed | `tracker=malformed`, `reason=<token>` (exit 1, no `gh` call) |
 | ready | `tracker=present`, `url=`, `dir=`, `file=<dir>/state.json`, `collection=harness`, `doc=state`, `issues=<n>`, `milestones=<m>`, `truncated=<true\|false>`, `checked=<checkedAt>`, then one `warn=<token> section=<id>` line per dropped section (tokens `section-missing`, `section-too-large`, `section-no-heading`, `section-empty`, in declaration order), then `result=ready` |
-| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|issues-recent\|prs\|branch\|ci\|tree\|section\|issues-refs>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
+| skip (exit 1) | `result=skip`, then `reason=query-failed site=<repo\|milestones\|issues-open\|issues-closed\|issues-recent\|prs\|pr-files\|branch\|ci\|tree\|section\|issues-refs>`, `reason=too-large bytes=<n>` or `reason=build-failed` |
 
 Every `gh` call is a read (`repo view`, `issue list`, `pr list`, GET `api`), and none is retried:
 any failure fails closed, removes `state.json` (a stale one from an earlier run included) and
@@ -294,11 +294,25 @@ those keys, or a page without the blocks, shows no such block; the page needs a 
   error: when one account both authors and merges, most such PRs carry it.
 - `openPrs[]` lists every open PR, whatever its branch or author, sorted by number:
   `{number, title, url, author, headRefName, issue, draft, ci, reasons}`. `reasons` is
-  `ci-failing` (when `ci` is `failing`) then `awaiting-review` (no non-author `APPROVED` latest
-  review); a draft has none.
+  `ci-failing` (when `ci` is `failing`), then `governance-path` (unless the PR is cleared, below),
+  then `awaiting-review` (no non-author `APPROVED` latest review); a draft has none.
+- `governance-path` marks a PR only the maintainer can merge under full auto or Autonomy mode, or
+  one whose changed files could not be classified. One extra `gh pr list --state open --limit 50`
+  call reads the newest 50 open PRs' `changedFiles` and `files`, and each PR's paths go to
+  `bin/governance-paths.sh --paths`, the merge floor's own classifier (resolved from the script's
+  own directory only), with the declared globs of the working-tree `CLAUDE.md`. A PR is cleared of
+  the reason only when it appears once in that result, its file list is complete (as many files as
+  `changedFiles`, at least one) and well-formed (every path a non-empty string with no control
+  character, every `changeType` one of `ADDED`, `MODIFIED`, `DELETED`, `CHANGED`, `COPIED`), and the
+  classifier exits 0 with `verdict=none`. Anything else keeps the reason: `hold`, `lessons-only`
+  (it touches `.claude/`, and the floor's lessons carve-out adds checks the tracker does not
+  model), a classifier error or malformed "Governance paths" section, a truncated list, a renamed
+  file (GitHub's list does not show its old path), and a PR past the first 50. It is display only
+  and never decides a merge. No changed path is stored in `state.json` or printed.
 - `waitingOnYou[]` is `{kind:"issue"|"pr", number, reason}`: each `needs-human` issue
   (`needs-human`), each `planned` issue (`plan-proposed`), the first reason of each open PR that has
-  one, and each solo merge in `recent` (`solo-merge`), sorted by reason in that order, then number.
+  one, and each solo merge in `recent` (`solo-merge`), sorted by reason in the order `needs-human`,
+  `ci-failing`, `governance-path`, `awaiting-review`, `plan-proposed`, `solo-merge`, then number.
   `plan-proposed` items are left out when auto-approval is in force: the working-tree `CLAUDE.md`
   (like the "Tracker" section) has a heading titled exactly "Plan auto-approval policy", or an
   "Autonomy mode" heading whose section's first fence has a first `mode:` line with the value
@@ -308,9 +322,12 @@ those keys, or a page without the blocks, shows no such block; the page needs a 
 Honest limits: `recent` and `openPrs` come from the newest 200 PRs, so an open PR older than
 those is missing. More than 200 closed issues in the window sets `truncated`. The verifier token is
 read from the PR body, which anyone who can edit the PR can write, so it is a hint and never
-provenance (the merge floor's archive cross-check is). `soloMerge` uses latest reviews only. No
-governance-path reason is computed: a PR the merge floor would hold for a governance path shows only
-as `awaiting-review`.
+provenance (the merge floor's archive cross-check is). `soloMerge` uses latest reviews only. The
+governance-path read covers the newest 50 open PRs; a PR past them, one with a renamed file or a
+truncated file list reads `governance-path`. It reads the working-tree `CLAUDE.md`'s globs and
+GitHub's merge-base file list, where the floor reads the base tip and diffs base to head; they differ
+only for a PR behind the default branch, which the floor holds as `behind` anyway. A page published
+before this reason existed shows the raw token until it is re-published.
 
 ## The skill's procedures
 

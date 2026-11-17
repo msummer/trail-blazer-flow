@@ -439,8 +439,9 @@ generic subagents need:
     ````
 
     Read mechanically by `bin/governance-paths.sh` — the same script `bin/merge-floor.sh` calls
-    for item 5's read, and the one `check-harness.sh` calls (in a validation-only mode, never to
-    compute a verdict) — from the section's first fenced code block only; blank lines and
+    for item 5's read, the one `check-harness.sh` calls (in a validation-only mode, never to
+    compute a verdict), and the one `bin/tracker-sync.sh` calls (its display-only `--paths` mode,
+    for the tracker's governance-path reason, never to decide a merge) — from the section's first fenced code block only; blank lines and
     `#`-prefixed lines inside it are ignored, and every other line is trimmed and treated as one
     glob. **Built-in rules** (case-insensitive, always active whether or not this section exists):
     any path segment equal to `.claude`, `.github` (all of it, not only workflow files), `adr`, or
@@ -458,8 +459,9 @@ generic subagents need:
     unbalanced one) or a backslash in an entry that holds a bracket (`pages/\[id].tsx`) makes the
     WHOLE section malformed, as does a line starting `!` (negation) or `/` or `./` (a leading
     slash) — fail-closed, rather than silently matching nothing forever.
-    Read from the **base tip's** CLAUDE.md only — never the PR head, never the working tree, so a
-    PR can't loosen the rule it's held against by editing this section in the same PR. A
+    The merge pass reads the **base tip's** CLAUDE.md only — never the PR head, never the working
+    tree, so a PR can't loosen the rule it's held against by editing this section in the same PR;
+    the tracker's display-only read uses the working tree and never decides a merge. A
     `CLAUDE.md` that is a symlink in that base tree (e.g. `CLAUDE.md -> AGENTS.md`, also written
     `./AGENTS.md`) is followed one hop, to a plain relative path inside the same tree (leading `./`
     segments are dropped); a link that is absolute, escapes, has an inner `.` segment, is missing,
@@ -481,8 +483,9 @@ generic subagents need:
     `governance paths:` line, because the merge pass reads no section from that repo (an untracked
     `CLAUDE.md` is not reported). The rule's own
     words apply beyond any explicit list too — a policy/ADR document or CI/build config under a name
-    these rules don't match, and **any doubt holds**. Only the merge pass's governance-path read (item 5) and the doctor's
-    validation ever read this section; nothing else in the harness does.
+    these rules don't match, and **any doubt holds**. Only the merge pass's governance-path read (item 5), the doctor's
+    validation and the tracker's display-only read ever read this section; nothing else in the
+    harness does.
 
 11. **Tracker** (optional) — a section titled exactly "Tracker" whose first fenced block holds one
     `url: https://...` line, the address of this repo's live tracker artifact, and optionally up to

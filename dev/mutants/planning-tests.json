@@ -1240,6 +1240,7 @@
         "tracker-query-failed-issues-recent",
         "tracker-query-failed-issues-refs",
         "tracker-query-failed-milestones",
+        "tracker-query-failed-pr-files",
         "tracker-query-failed-prs",
         "tracker-query-failed-repo",
         "tracker-query-failed-section",
@@ -1247,6 +1248,138 @@
         "tracker-recent-window",
         "tracker-section-bad-blob",
         "tracker-too-large"
+      ]
+    },
+    {
+      "name": "659-gov-truncated-trusted",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "           and (.files | length) == .changedFiles and .changedFiles > 0\n",
+          "to": "           and .changedFiles > 0\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-governance-unknown"
+      ]
+    },
+    {
+      "name": "659-gov-rename-trusted",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "\"CHANGED\", \"COPIED\"",
+          "to": "\"CHANGED\", \"COPIED\", \"RENAMED\""
+        }
+      ],
+      "expect_fail": [
+        "tracker-governance-unknown"
+      ]
+    },
+    {
+      "name": "659-gov-dup-after-shape",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "  [.[] | objects] | group_by(.number) | map(select(length == 1) | .[0])\n  | .[]\n  | select(",
+          "to": "  [.[] | objects\n  | select("
+        },
+        {
+          "from": "  | .number'",
+          "to": "  | .number] | group_by(.) | map(select(length == 1) | .[0]) | .[]'"
+        }
+      ],
+      "expect_fail": [
+        "tracker-governance-unknown"
+      ]
+    },
+    {
+      "name": "659-gov-hold-cleared",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "[ \"$grc\" -eq 0 ] && [ \"$glast\" = \"verdict=none\" ]",
+          "to": "[ \"$glast\" != \"verdict=error\" ]"
+        }
+      ],
+      "expect_fail": [
+        "tracker-governance-path"
+      ]
+    },
+    {
+      "name": "659-gov-reason-order",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "(if any($clear[]; . == $pn) then empty else \"governance-path\" end),\n                         (if approved_by_other($a) then empty else \"awaiting-review\" end)]",
+          "to": "(if approved_by_other($a) then empty else \"awaiting-review\" end),\n                         (if any($clear[]; . == $pn) then empty else \"governance-path\" end)]"
+        }
+      ],
+      "expect_fail": [
+        "tracker-governance-path",
+        "tracker-governance-unknown"
+      ]
+    },
+    {
+      "name": "659-gov-path-lookup",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "\"$script_dir/governance-paths.sh\" --paths",
+          "to": "governance-paths.sh --paths"
+        }
+      ],
+      "expect_fail": [
+        "tracker-governance-path",
+        "tracker-governance-unknown",
+        "tracker-open-prs",
+        "tracker-waiting-on-you"
+      ]
+    },
+    {
+      "name": "659-pr-files-fail-open",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "\"$GOV_FIELDS\" </dev/null 2>/dev/null)\"; then q_fail pr-files; fi",
+          "to": "\"$GOV_FIELDS\" </dev/null 2>/dev/null)\"; then :; fi"
+        },
+        {
+          "from": "\"$work/pr-files.json\" >/dev/null 2>&1 || q_fail pr-files",
+          "to": "\"$work/pr-files.json\" >/dev/null 2>&1 || :"
+        }
+      ],
+      "expect_fail": [
+        "tracker-query-failed-pr-files"
+      ]
+    },
+    {
+      "name": "659-reason-text-drop",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "    \"governance-path\": \"governance path\",\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-reason-text"
       ]
     },
     {
