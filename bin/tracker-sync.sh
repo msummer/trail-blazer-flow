@@ -30,7 +30,7 @@
 #   malformed:   tracker=malformed, then reason=<no-fence|unknown-key|no-url|multiple-urls|bad-url|
 #                bad-section>, checked in that order (exit 1; no gh call, nothing written)
 #   skip:        result=skip, then reason=query-failed site=<repo|milestones|issues-open|
-#                issues-closed|prs|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
+#                issues-closed|issues-recent|prs|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
 #                reason=build-failed
 #                (exit 1; no state.json is left behind — a stale one from an earlier run is removed)
 #   ready (exit 0), in this order: tracker=present, url=<url>, dir=<dir>, file=<dir>/state.json,
@@ -57,7 +57,8 @@
 # file yields a table or list: {id,title,kind:"table",source,columns[],rows[{cells[],issues[]}],
 # truncated} or {id,title,kind:"list",source,rows[{text,issues[]}],truncated}; at most 50 rows, 8
 # columns, 200 characters per cell), refs[] {number,title,url,state} (closed issues that section
-# rows reference by #<n> and issues[] does not hold). Scope: the open and closed issues of the
+# rows reference by #<n> and issues[] does not hold), recentSince, recent[], openPrs[],
+# waitingOnYou[]. Scope of issues[]: the open and closed issues of the
 # open milestones (only the first 100 open milestones are read), plus every other open issue. An
 # open issue with no milestone, or whose milestone is closed or not read, is listed with milestone
 # null. Issue state, first match wins: closed and
@@ -80,6 +81,20 @@
 # `- results:` (at most 50, each string cut to 200). A missing, over-64KiB or unparseable file is
 # baseline null, never a skip. baselineCurrent is mainSha starting with baseline.commit, or null
 # without a baseline.
+# RECENT AND WAITING (#644, #645): recentSince is checkedAt minus 14 days (one jq computation, no
+# second `date`). recent[] lists, newest first, the PRs merged and the issues closed since then:
+# a PR row {kind,number,title,url,mergedAt,author,mergedBy,issue,ci,verifier,soloMerge}, an issue
+# row {kind,number,title,url,closedAt,state}. author/mergedBy are logins only, never display
+# names. ci is none|pending|passing|failing from statusCheckRollup (an unknown conclusion is
+# failing). verifier is pass|fail|incomplete|died from the last verifier status line in the PR
+# body whose issue equals the linked issue, else null; no other body text is kept. soloMerge is
+# true iff author and merger are the same login and no other login's latest review APPROVED.
+# openPrs[] lists every open PR, any branch or author, with reasons[] (ci-failing, then
+# awaiting-review; none for a draft). waitingOnYou[] is {kind,number,reason} sorted by reason in
+# the order needs-human, ci-failing, awaiting-review, plan-proposed, solo-merge, then number;
+# plan-proposed is omitted when CLAUDE.md has a "Plan auto-approval policy" heading or an
+# "Autonomy mode" section whose first fence's first mode: line is autonomous. Reaching the 200
+# recent closed issues sets truncated; the PR read limit still does not.
 
 set -uo pipefail
 
@@ -103,6 +118,10 @@ MAX_FILE_BYTES=262144
 MAX_REFS=50
 REF_LIMIT=500
 ISSUE_FIELDS="number,title,url,state,stateReason,labels,milestone,blockedBy"
+PR_FIELDS="number,url,state,headRefName,title,author,isDraft,mergedAt,mergedBy,body,statusCheckRollup,latestReviews"
+RECENT_DAYS=14
+RECENT_LIMIT=200
+RECENT_FIELDS="number,title,url,state,stateReason,closedAt"
 
 usage() {
   sed -n '3,/^set -uo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'
@@ -379,7 +398,7 @@ else
   printf '[]\n' > "$work/closed.json"
 fi
 
-if ! out="$(gh pr list --state all --limit "$PR_LIMIT" --json number,url,state,headRefName 2>/dev/null)"; then q_fail prs; fi
+if ! out="$(gh pr list --state all --limit "$PR_LIMIT" --json "$PR_FIELDS" 2>/dev/null)"; then q_fail prs; fi
 printf '%s\n' "$out" > "$work/prs.json"
 jq -e 'type == "array"' "$work/prs.json" >/dev/null 2>&1 || q_fail prs
 
@@ -683,6 +702,51 @@ fi
 
 checked_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 
+# The recent window starts RECENT_DAYS before checkedAt, computed by jq from that one timestamp (no
+# second `date` call). Only its date part reaches the search string, and only when well-formed.
+recent_since="$(jq -rn --arg at "$checked_at" --argjson d "$RECENT_DAYS" '$at | fromdateiso8601 - ($d * 86400) | todate' 2>/dev/null)"
+recent_day="${recent_since%%T*}"
+case "$recent_day" in
+  [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) : ;;
+  *) skip "build-failed" ;;
+esac
+if ! out="$(gh issue list --state closed --search "is:issue closed:>=$recent_day" --limit "$RECENT_LIMIT" --json "$RECENT_FIELDS" 2>/dev/null)"; then q_fail issues-recent; fi
+printf '%s\n' "$out" > "$work/recent.json"
+jq -e 'type == "array"' "$work/recent.json" >/dev/null 2>&1 || q_fail issues-recent
+recent_trunc=false
+[ "$(jq 'length' "$work/recent.json")" -ge "$RECENT_LIMIT" ] && recent_trunc=true
+
+# read_auto_approval — auto_appr=true when the working-tree CLAUDE.md has a "Plan auto-approval
+# policy" heading, or an "Autonomy mode" heading whose section's first fence has a first `mode:`
+# line valued `autonomous` (the doctor's rule, bin/check-harness.sh). Headings and fences are read
+# fence-aware: a heading inside a fenced block counts for nothing.
+auto_appr=false
+read_auto_approval() {
+  local cm="$top/CLAUDE.md"
+  [ -f "$cm" ] || return 0
+  auto_appr="$(awk '
+    /^```/ {
+      f = !f
+      if (inA && !fdone) { if (f) { inf = 1 } else { inf = 0; fdone = 1 } }
+      next
+    }
+    !f && /^#+[[:space:]]/ {
+      match($0, /^#+/); dep = RLENGTH
+      if (inA && dep <= ad) { inA = 0; inf = 0 }
+      if ($0 ~ /^#+[[:space:]]+Plan auto-approval policy[[:space:]]*$/) { on = 1 }
+      if ($0 ~ /^#+[[:space:]]+Autonomy mode[[:space:]]*$/) { inA = 1; ad = dep; fdone = 0; inf = 0; mseen = 0 }
+      next
+    }
+    inf && !mseen && /^[[:space:]]*mode:/ {
+      mseen = 1
+      v = $0; sub(/^[[:space:]]*mode:[[:space:]]*/, "", v); sub(/[[:space:]]+$/, "", v)
+      if (v == "autonomous") { on = 1 }
+    }
+    END { print (on ? "true" : "false") }' "$cm")"
+  [ "$auto_appr" = "true" ] || auto_appr=false
+}
+read_auto_approval
+
 jq -n -c \
   --slurpfile repo "$work/repo.json" \
   --slurpfile ms "$work/milestones.json" \
@@ -753,6 +817,72 @@ jq -n -c \
       sections: ($secs[0] | tolist),
       refs: ([($refs[0] | tolist)[] | {number, title, url, state: state_of}] | sort_by(.number))
     }' > "$work/state.json" || skip "build-failed"
+
+# Second pass over the finished snapshot: what shipped in the window, every open PR, and what waits
+# on the maintainer. PR bodies are read only here, and only the four verifier tokens leave them.
+ACTIVITY_JQ='
+  def tolist: if (. | type) == "array" then . else [] end;
+  def login: if type == "object" then (.login // null) else null end;
+  def linked:
+    (.headRefName // "") as $h
+    | if ($h | test("^claude/[0-9]+-")) then ($h | capture("^claude/(?<n>[0-9]+)-").n | tonumber) else null end;
+  def ci_of:
+    (.statusCheckRollup | tolist) as $r
+    | if ($r | length) == 0 then "none"
+      else ([$r[] | (.conclusion // .state // "PENDING") | tostring | ascii_upcase]) as $s
+        | if any($s[]; IN("SUCCESS", "NEUTRAL", "SKIPPED", "", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED") | not) then "failing"
+          elif any($s[]; IN("", "PENDING", "QUEUED", "IN_PROGRESS", "EXPECTED", "WAITING", "REQUESTED")) then "pending"
+          else "passing" end
+      end;
+  def approved_by_other($a):
+    any((.latestReviews | tolist)[]; .state == "APPROVED" and ((.author | login) != null) and ((.author | login) != $a));
+  def verifier_of($n):
+    if $n == null then null
+    else ((.body // "") | tostring | split("\n") | map(sub("\r$"; ""))
+      | map(capture("^<!-- harness-status: stage=verifier issue=(?<i>[0-9]+) outcome=(?<o>pass|fail|incomplete|died) ")?)
+      | map(select(.i == ($n | tostring)))
+      | if length == 0 then null else (last | .o) end)
+    end;
+  ($prs[0] | tolist) as $praw
+  | ($ri[0] | tolist) as $iraw
+  | (["needs-human", "ci-failing", "awaiting-review", "plan-proposed", "solo-merge"]) as $order
+  | ([$praw[]
+      | select(.state == "MERGED" and ((.mergedAt | type) == "string") and .mergedAt >= $cut)
+      | linked as $n
+      | (.author | login) as $a
+      | {kind: "pr", number: .number, title: (.title // ""), url: .url, mergedAt: .mergedAt,
+         author: $a, mergedBy: (.mergedBy | login), issue: $n, ci: ci_of, verifier: verifier_of($n),
+         soloMerge: ($a != null and $a == (.mergedBy | login) and (approved_by_other($a) | not))}]) as $rpr
+  | ([$iraw[]
+      | select(.state == "CLOSED" and ((.closedAt | type) == "string") and .closedAt >= $cut)
+      | {kind: "issue", number: .number, title: (.title // ""), url: .url, closedAt: .closedAt,
+         state: (if .stateReason == "NOT_PLANNED" then "not-planned" else "done" end)}]) as $rissue
+  | ([$praw[]
+      | select(.state == "OPEN")
+      | linked as $n
+      | (.author | login) as $a
+      | ci_of as $ci
+      | (.isDraft == true) as $d
+      | {number: .number, title: (.title // ""), url: .url, author: $a, headRefName: (.headRefName // ""),
+         issue: $n, draft: $d, ci: $ci,
+         reasons: (if $d then []
+                   else [(if $ci == "failing" then "ci-failing" else empty end),
+                         (if approved_by_other($a) then empty else "awaiting-review" end)] end)}]
+      | sort_by(.number)) as $open
+  | ([.issues[] | select(.state == "needs-human") | {kind: "issue", number: .number, reason: "needs-human"}]
+     + (if $auto then [] else [.issues[] | select(.state == "planned") | {kind: "issue", number: .number, reason: "plan-proposed"}] end)
+     + [$open[] | select((.reasons | length) > 0) | {kind: "pr", number: .number, reason: .reasons[0]}]
+     + [$rpr[] | select(.soloMerge) | {kind: "pr", number: .number, reason: "solo-merge"}]
+     | sort_by([(.reason as $r | $order | index($r)), .number])) as $wait
+  | . + {recentSince: $cut,
+         recent: (($rpr + $rissue) | sort_by([(.mergedAt // .closedAt), .kind, .number]) | reverse),
+         openPrs: $open,
+         waitingOnYou: $wait}
+  | .truncated = (.truncated or $rtrunc)'
+jq -c --slurpfile prs "$work/prs.json" --slurpfile ri "$work/recent.json" \
+  --arg cut "$recent_since" --argjson auto "$auto_appr" --argjson rtrunc "$recent_trunc" \
+  "$ACTIVITY_JQ" "$work/state.json" > "$work/state2.json" || skip "build-failed"
+mv "$work/state2.json" "$work/state.json" || skip "build-failed"
 
 bytes="$(wc -c < "$work/state.json" | tr -d '[:space:]')"
 if [ "$bytes" -gt "$MAX_BYTES" ]; then

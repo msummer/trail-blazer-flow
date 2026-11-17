@@ -27,7 +27,7 @@ in this session` and stop. Nothing here ever blocks, fails or reorders a cycle.
 2. Publish with `Artifact`: `file_path` = the printed `page=`, `description` "Issue tracker for
    <owner/repo>", an icon word, and `capabilities` verbatim:
    `{"db":{"rules":[{"path":"","read":"view","write":"admin"}]},"user":{}}`. Never share it: tell
-   the user the tracker is private and that sharing (which exposes issue titles) is their choice.
+   the user the tracker is private and that sharing (which exposes issue and PR titles) is their choice.
 3. Draft a `## Tracker` section for `CLAUDE.md`: a fence containing `url: <the artifact url>`.
    Write it only with the user's approval, leave it uncommitted, then run Sync.
 

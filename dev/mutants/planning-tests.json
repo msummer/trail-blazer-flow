@@ -1237,12 +1237,14 @@
         "tracker-query-failed-ci",
         "tracker-query-failed-issues-closed",
         "tracker-query-failed-issues-open",
+        "tracker-query-failed-issues-recent",
         "tracker-query-failed-issues-refs",
         "tracker-query-failed-milestones",
         "tracker-query-failed-prs",
         "tracker-query-failed-repo",
         "tracker-query-failed-section",
         "tracker-query-failed-tree",
+        "tracker-recent-window",
         "tracker-section-bad-blob",
         "tracker-too-large"
       ]
@@ -1526,6 +1528,117 @@
       ],
       "expect_fail": [
         "tracker-section-refs"
+      ]
+    },
+    {
+      "name": "644-recent-window",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "and ((.mergedAt | type) == \"string\") and .mergedAt >= $cut)",
+          "to": "and ((.mergedAt | type) == \"string\"))"
+        }
+      ],
+      "expect_fail": [
+        "tracker-recent-window"
+      ]
+    },
+    {
+      "name": "644-recent-fail-open",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "then q_fail issues-recent; fi\n",
+          "to": "then :; fi\n"
+        },
+        {
+          "from": "|| q_fail issues-recent\n",
+          "to": "|| true\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-query-failed-issues-recent"
+      ]
+    },
+    {
+      "name": "644-solo-self-approval",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "((.author | login) != null) and ((.author | login) != $a))",
+          "to": "((.author | login) != null))"
+        }
+      ],
+      "expect_fail": [
+        "tracker-solo-merge"
+      ]
+    },
+    {
+      "name": "644-verifier-vocab",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "(?<o>pass|fail|incomplete|died) ",
+          "to": "(?<o>[a-z]+) "
+        }
+      ],
+      "expect_fail": [
+        "tracker-verifier-token"
+      ]
+    },
+    {
+      "name": "645-open-prs-any-branch",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "      | select(.state == \"OPEN\")\n",
+          "to": "      | select(.state == \"OPEN\" and ((.headRefName // \"\") | startswith(\"claude/\")))\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-ci-rollup",
+        "tracker-open-prs",
+        "tracker-waiting-on-you"
+      ]
+    },
+    {
+      "name": "645-ci-unknown-fails",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "any($s[]; IN(\"SUCCESS\", \"NEUTRAL\", \"SKIPPED\", \"\", \"PENDING\", \"QUEUED\", \"IN_PROGRESS\", \"EXPECTED\", \"WAITING\", \"REQUESTED\") | not) then \"failing\"",
+          "to": "any($s[]; IN(\"FAILURE\", \"ERROR\", \"CANCELLED\", \"TIMED_OUT\")) then \"failing\""
+        }
+      ],
+      "expect_fail": [
+        "tracker-ci-rollup"
+      ]
+    },
+    {
+      "name": "645-autonomy-inert",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "if (v == \"autonomous\") { on = 1 }",
+          "to": "{ on = 1 }"
+        }
+      ],
+      "expect_fail": [
+        "tracker-waiting-autonomy"
       ]
     }
   ]

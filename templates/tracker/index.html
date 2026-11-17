@@ -88,6 +88,7 @@ table.fsec th, table.fsec td { text-align: left; vertical-align: top; padding: 4
 .badge[data-s="pr-open"], .badge[data-s="approved"] { color: var(--active); border-color: var(--active); }
 .badge[data-s="blocked"], .badge[data-s="needs-human"] { color: var(--bad); border-color: var(--bad); }
 .badge[data-s="held"], .badge[data-s="waiting"], .badge[data-s="in-progress"], .badge[data-s="unconfirmed"] { color: var(--wait); border-color: var(--wait); }
+.badge[data-s="flag"] { color: var(--wait); border-color: var(--wait); }
 .counts { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0 4px; }
 .counts .badge { font-size: 0.9rem; padding: 3px 10px; white-space: nowrap; }
 .counts .badge b { font-size: 1.05rem; margin-right: 4px; }
@@ -172,6 +173,98 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
       row.appendChild(w);
     }
     return row;
+  }
+
+  function arr(v) { return Array.isArray(v) ? v : []; }
+  function own(map, k) { return Object.prototype.hasOwnProperty.call(map, k) ? map[k] : undefined; }
+  function flag(t) {
+    var b = el("span", "badge", t);
+    b.setAttribute("data-s", "flag");
+    return b;
+  }
+  var REASON_TEXT = {
+    "needs-human": "needs a human",
+    "ci-failing": "CI failing",
+    "awaiting-review": "awaiting review",
+    "plan-proposed": "plan to review",
+    "solo-merge": "merged by author, no second review"
+  };
+  function reasonText(r) {
+    return Object.prototype.hasOwnProperty.call(REASON_TEXT, r) ? REASON_TEXT[r] : String(r);
+  }
+  function itemLink(kind, n, url, repoUrl) {
+    var fallback = repoUrl ? repoUrl + (kind === "pr" ? "/pull/" : "/issues/") + n : "";
+    return link((kind === "pr" ? "PR #" : "#") + n, url || fallback);
+  }
+
+  function waitingBlock(h) {
+    if (!Array.isArray(h.waitingOnYou)) { return null; }
+    var urls = { issue: {}, pr: {} };
+    var titles = { issue: {}, pr: {} };
+    arr(h.issues).forEach(function (i) { urls.issue[i.number] = i.url; titles.issue[i.number] = i.title; });
+    arr(h.openPrs).forEach(function (p) { urls.pr[p.number] = p.url; titles.pr[p.number] = p.title; });
+    arr(h.recent).forEach(function (r) {
+      if (r && r.kind === "pr") { urls.pr[r.number] = r.url; titles.pr[r.number] = r.title; }
+    });
+    var box = el("div");
+    box.appendChild(el("h2", null, "Waiting on you"));
+    var c = el("div", "card");
+    h.waitingOnYou.forEach(function (it) {
+      if (!it || typeof it !== "object") { return; }
+      var kind = it.kind === "pr" ? "pr" : "issue";
+      var row = el("div", "row");
+      var t = el("div", "title");
+      t.appendChild(itemLink(kind, it.number, own(urls[kind], it.number), h.repoUrl));
+      var ttl = own(titles[kind], it.number);
+      if (ttl) { t.appendChild(document.createTextNode(" " + ttl)); }
+      row.appendChild(t);
+      row.appendChild(flag(reasonText(it.reason)));
+      c.appendChild(row);
+    });
+    if (h.waitingOnYou.length === 0) { c.appendChild(el("div", "muted", "Nothing is waiting on you.")); }
+    box.appendChild(c);
+    return box;
+  }
+
+  function recentBlock(h) {
+    if (!Array.isArray(h.recent)) { return null; }
+    var box = el("div");
+    var title = el("h2", null, "Recently shipped");
+    if (h.recentSince) {
+      title.appendChild(document.createTextNode(" "));
+      title.appendChild(el("span", "muted", "since " + String(h.recentSince).slice(0, 10)));
+    }
+    box.appendChild(title);
+    var c = el("div", "card");
+    h.recent.forEach(function (r) {
+      if (!r || typeof r !== "object") { return; }
+      var row = el("div", "row");
+      var t = el("div", "title");
+      if (r.kind === "pr") {
+        t.appendChild(itemLink("pr", r.number, r.url, h.repoUrl));
+        t.appendChild(document.createTextNode(" " + (r.title || "")));
+        row.appendChild(t);
+        row.appendChild(el("span", "muted", "merged " + String(r.mergedAt || "").slice(0, 10) + (r.mergedBy ? " by " + r.mergedBy : "")));
+        if (r.issue !== null && r.issue !== undefined) {
+          var li = el("span", "muted");
+          li.appendChild(link("#" + r.issue, h.repoUrl ? h.repoUrl + "/issues/" + r.issue : ""));
+          row.appendChild(li);
+        }
+        if (r.soloMerge === true) { row.appendChild(flag(reasonText("solo-merge"))); }
+        if (r.verifier && r.verifier !== "pass") { row.appendChild(flag("verifier: " + r.verifier)); }
+        if (r.ci === "failing") { row.appendChild(flag(reasonText("ci-failing"))); }
+      } else {
+        t.appendChild(itemLink("issue", r.number, r.url, h.repoUrl));
+        t.appendChild(document.createTextNode(" " + (r.title || "")));
+        row.appendChild(t);
+        row.appendChild(badge(String(r.state)));
+        row.appendChild(el("span", "muted", "closed " + String(r.closedAt || "").slice(0, 10)));
+      }
+      c.appendChild(row);
+    });
+    if (h.recent.length === 0) { c.appendChild(el("div", "muted", "Nothing shipped in this window.")); }
+    box.appendChild(c);
+    return box;
   }
 
   function header(h) {
@@ -486,6 +579,10 @@ button { font: inherit; background: var(--bg); color: var(--fg); border: 1px sol
     app.appendChild(header(h));
     var hs = healthStrip(h.health);
     if (hs) { app.appendChild(hs); }
+    var waiting = waitingBlock(h);
+    if (waiting) { app.appendChild(waiting); }
+    var recent = recentBlock(h);
+    if (recent) { app.appendChild(recent); }
     var people = peopleBlock();
     if (people) { app.appendChild(people); }
     var issues = h.issues || [];

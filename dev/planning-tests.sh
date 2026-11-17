@@ -12577,7 +12577,9 @@ exit 1'
 # git/blobs (blob-<sha>.json). Its `issue list --state closed` filters closed.json by the
 # milestone NUMBER in its own --milestone argument (a title passed instead would match the wrong
 # milestone or none), so a script that ignored the milestone would see another milestone's
-# issues; without --milestone it answers refs.json, the repo-file sections' references query. The fixtures' JSON follows the shapes
+# issues; without --milestone it answers refs.json, the repo-file sections' references query.
+# `issue list --search` (the recent-closed query) serves recent-issues.json whatever the search
+# string, and honours reject-issues-recent. The fixtures' JSON follows the shapes
 # probed on gh 2.102.0: blockedBy is {nodes:[...],totalCount:n}, an open issue's stateReason is "".
 # Bulky inputs (the too-large and truncated fixtures) are built with jq, never hand-typed.
 
@@ -12650,6 +12652,9 @@ case "$1 $2" in
   "issue list")
     validate_json_fields "$GH_ISSUE_JSON_FIELDS" "$@"
     case " $* " in
+      *" --search "*)
+        if fire issues-recent; then echo "stub: simulated failure" >&2; exit 1; fi
+        cat "__DIR__/recent-issues.json"; exit 0 ;;
       *" --state closed "*)
         if fire issues-closed; then echo "stub: simulated failure" >&2; exit 1; fi
         ms=""; prev=""
@@ -12731,6 +12736,7 @@ build_tracker_env() {
     "$(tk_i 21 '[]' 1 null CLOSED NOT_PLANNED)" \
     "$(tk_i 22 '[]' 2 null CLOSED COMPLETED)" > "$dir/closed.json"
   jq -n -c '[{number:100,url:"https://example.invalid/o/r/pull/100",state:"MERGED",headRefName:"claude/12-a"},{number:101,url:"https://example.invalid/o/r/pull/101",state:"OPEN",headRefName:"claude/12-b"},{number:102,url:"https://example.invalid/o/r/pull/102",state:"OPEN",headRefName:"feature/12-x"},{number:103,url:"https://example.invalid/o/r/pull/103",state:"OPEN",headRefName:"claude/4-thing"},{number:104,url:"https://example.invalid/o/r/pull/104",state:"MERGED",headRefName:"claude/20-x"}]' > "$dir/prs.json"
+  printf '[]\n' > "$dir/recent-issues.json"
   tk_claude "$dir" 'url: https://example.invalid/artifact/abc'
 }
 
@@ -12788,10 +12794,11 @@ tk_section_env() {
   mkdir -p "$dir/work/docs"
   printf '## Milestones\n\nworking tree copy\n' > "$dir/work/docs/status.md"
 }
-# tk_refs_calls DIR — how many closed issue lists without --milestone (the references query) ran.
+# tk_refs_calls DIR — how many closed issue lists without --milestone or --search (the references
+# query; --search is #644's recent-closed query) ran.
 tk_refs_calls() {
   [ -f "$1/.gh-calls" ] || { printf '0'; return 0; }
-  grep -F -- 'issue list --state closed' "$1/.gh-calls" | grep -cvF -- '--milestone'
+  grep -F -- 'issue list --state closed' "$1/.gh-calls" | grep -vF -- '--milestone' | grep -cvF -- '--search'
 }
 
 # mutant:622-precedence — moves the pr-open arm of the state chain above needs-human and blocked,
@@ -13556,6 +13563,255 @@ case_tracker_usage() {
   expect_no_log "$dir/.gh-calls"
 }
 
+# tk_pr NUMBER STATE HEAD [EXTRA_JSON] — one `gh pr list` element with every field the script asks
+# for (an alice-authored, non-draft PR with no merge, body, checks or reviews), EXTRA_JSON merged
+# over it. author carries a display name on purpose: it must never reach the snapshot.
+tk_pr() {
+  local extra="${4:-}"
+  [ -n "$extra" ] || extra='{}'
+  jq -n -c --argjson n "$1" --arg st "$2" --arg h "$3" --argjson x "$extra" \
+    '{number:$n,url:("https://example.invalid/o/r/pull/"+($n|tostring)),state:$st,headRefName:$h,title:("PR "+($n|tostring)),author:{login:"alice",name:"NAME-SENTINEL-alice",id:"U_a"},isDraft:false,mergedAt:null,mergedBy:null,body:"",statusCheckRollup:[],latestReviews:[]} + $x'
+}
+# tk_ri NUMBER CLOSEDAT [STATEREASON] — one recent closed issue as `gh issue list --search` returns it.
+tk_ri() {
+  jq -n -c --argjson n "$1" --arg at "$2" --arg sr "${3:-COMPLETED}" \
+    '{number:$n,title:("Issue "+($n|tostring)),url:("https://example.invalid/o/r/issues/"+($n|tostring)),state:"CLOSED",stateReason:$sr,closedAt:$at}'
+}
+
+# tk_body TEXT — a merged-PR extra object (merged inside the window) whose body is TEXT.
+tk_body() {
+  jq -n -c --arg b "$1" '{mergedAt:"2026-01-01T00:00:00Z",body:$b}'
+}
+
+# tracker-recent-window (#644) — recentSince is checkedAt minus 14 days (the one stubbed date call),
+# the closed-issue search carries that day, merged PRs and closed issues inside the window (the
+# boundary instant included) are listed newest first, and a PR outside the window, merged with no
+# mergedAt, still open, or closed unmerged — and an issue the search returned from before the
+# window — are not. An unparseable date skips with build-failed.
+# mutant:644-recent-window — drops the mergedAt >= recentSince test, so a PR merged before the
+# window is listed.
+case_tracker_recent_window() {
+  local dir; dir="$(mk_fixture tracker-recent-window)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_pr 201 MERGED claude/12-a '{"mergedAt":"2026-01-01T00:00:00Z"}')" \
+    "$(tk_pr 202 MERGED feature/x '{"mergedAt":"2025-12-19T03:04:05Z"}')" \
+    "$(tk_pr 203 MERGED feature/x '{"mergedAt":"2025-12-01T00:00:00Z"}')" \
+    "$(tk_pr 204 MERGED feature/x)" \
+    "$(tk_pr 205 OPEN feature/x)" \
+    "$(tk_pr 206 CLOSED feature/x)" > "$dir/prs.json"
+  tk_arr \
+    "$(tk_ri 302 2025-12-25T10:00:00Z NOT_PLANNED)" \
+    "$(tk_ri 301 2025-12-30T10:00:00Z)" \
+    "$(tk_ri 303 2025-12-01T10:00:00Z)" > "$dir/recent-issues.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.recentSince' '"2025-12-19T03:04:05Z"'
+  tk_jq "$dir" '[.recent[] | [.kind, .number]]' '[["pr",201],["issue",301],["issue",302],["pr",202]]'
+  tk_jq "$dir" '[.recent[] | select(.kind == "issue") | .state]' '["done","not-planned"]'
+  expect_log_count "$dir/.gh-calls" 'issue list --state closed --search is:issue closed:>=2025-12-19 --limit 200 ' 1
+  expect_log_count "$dir/.date-calls" '-u ' 1
+  printf '#!%s\nprintf "not-a-date\\n"\n' "$bash_bin" > "$dir/tbin/date"
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=build-failed')" ] || { __ok=0; __why="${__why}stdout: expected build-failed skip, got $planning_out\n"; }
+  tk_no_state "$dir"
+}
+
+# tracker-recent-pr-fields (#644) — one merged PR's whole row (logins only, the linked issue from
+# claude/<n>-, the CI state and verifier token) and a null issue for another branch; a display name
+# on author or mergedBy never appears in state.json.
+case_tracker_recent_pr_fields() {
+  local dir hits; dir="$(mk_fixture tracker-recent-pr-fields)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_pr 210 MERGED claude/12-x '{"mergedAt":"2026-01-01T00:00:00Z","mergedBy":{"login":"bob","name":"NAME-SENTINEL-bob","id":"U_b"},"body":"<!-- harness-status: stage=verifier issue=12 outcome=pass retries=0 -->","statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS","state":null}],"latestReviews":[{"author":{"login":"carol"},"state":"APPROVED"}]}')" \
+    "$(tk_pr 211 MERGED feature/x '{"mergedAt":"2025-12-31T00:00:00Z"}')" > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '.recent[] | select(.number == 210)' '{"kind":"pr","number":210,"title":"PR 210","url":"https://example.invalid/o/r/pull/210","mergedAt":"2026-01-01T00:00:00Z","author":"alice","mergedBy":"bob","issue":12,"ci":"passing","verifier":"pass","soloMerge":false}'
+  tk_jq "$dir" '.recent[] | select(.number == 211) | [.issue, .verifier, .mergedBy, .soloMerge]' '[null,null,null,false]'
+  hits="$(grep -cF -- 'NAME-SENTINEL' "$(tk_state_file "$dir")")"
+  [ "$hits" = 0 ] || { __ok=0; __why="${__why}a display name reached state.json\n"; }
+}
+
+# tracker-solo-merge (#644) — soloMerge is true iff author and merger are the same non-null login
+# and no other login's latest review APPROVED; the author's own approval is not a second review.
+# mutant:644-solo-self-approval — counts the author's own APPROVED review as another login's, so a
+# self-approved self-merge stops being flagged (the fail-open direction).
+case_tracker_solo_merge() {
+  local dir; dir="$(mk_fixture tracker-solo-merge)"
+  build_tracker_env "$dir"
+  local m='"mergedAt":"2026-01-01T00:00:00Z"' al='"mergedBy":{"login":"alice"}'
+  local rv='"latestReviews":[{"author":{"login":"%s"},"state":"%s"}]'
+  local e220 e221 e222 e223
+  e220="{$m,$al}"
+  e221="{$m,$al,$(printf "$rv" alice APPROVED)}"
+  e222="{$m,$al,$(printf "$rv" bob CHANGES_REQUESTED)}"
+  e223="{$m,$al,$(printf "$rv" bob APPROVED)}"
+  tk_arr \
+    "$(tk_pr 220 MERGED feature/x "$e220")" \
+    "$(tk_pr 221 MERGED feature/x "$e221")" \
+    "$(tk_pr 222 MERGED feature/x "$e222")" \
+    "$(tk_pr 223 MERGED feature/x "$e223")" \
+    "$(tk_pr 224 MERGED feature/x '{"mergedAt":"2026-01-01T00:00:00Z","mergedBy":{"login":"bob"}}')" \
+    "$(tk_pr 225 MERGED feature/x '{"mergedAt":"2026-01-01T00:00:00Z"}')" > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.recent[] | [.number, .soloMerge]] | sort_by(.[0])' '[[220,true],[221,true],[222,true],[223,false],[224,false],[225,false]]'
+}
+
+# tracker-verifier-token (#644) — the verifier is the outcome of the LAST status line naming the
+# linked issue (CRLF lines included); another issue, an outside-vocabulary outcome, prose, a null
+# body, or no linked issue read null; no other body text reaches state.json.
+# mutant:644-verifier-vocab — accepts any outcome word, so outcome=passed is carried into the
+# snapshot instead of reading null.
+case_tracker_verifier_token() {
+  local dir hits; dir="$(mk_fixture tracker-verifier-token)"
+  build_tracker_env "$dir"
+  local s='<!-- harness-status: stage=verifier issue=12'
+  tk_arr \
+    "$(tk_pr 230 MERGED claude/12-x "$(tk_body "intro SENTINEL-BODY-644
+$s outcome=pass retries=0 -->
+tail")")" \
+    "$(tk_pr 231 MERGED claude/12-x "$(tk_body "$s outcome=pass retries=0 -->
+$s outcome=fail retries=0 -->")")" \
+    "$(tk_pr 232 MERGED claude/12-x "$(tk_body "$s outcome=died retries=0 -->"$'\r\n'"more")")" \
+    "$(tk_pr 233 MERGED claude/12-x "$(tk_body '<!-- harness-status: stage=verifier issue=13 outcome=pass retries=0 -->')")" \
+    "$(tk_pr 234 MERGED claude/12-x "$(tk_body "$s outcome=passed retries=0 -->")")" \
+    "$(tk_pr 235 MERGED claude/12-x "$(tk_body 'verifier verdict: pass')")" \
+    "$(tk_pr 236 MERGED claude/12-x '{"mergedAt":"2026-01-01T00:00:00Z","body":null}')" \
+    "$(tk_pr 237 MERGED feature/x "$(tk_body "$s outcome=pass retries=0 -->")")" > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.recent[] | [.number, .verifier]] | sort_by(.[0])' '[[230,"pass"],[231,"fail"],[232,"died"],[233,null],[234,null],[235,null],[236,null],[237,null]]'
+  hits="$(grep -cF -- 'SENTINEL-BODY-644' "$(tk_state_file "$dir")")"
+  [ "$hits" = 0 ] || { __ok=0; __why="${__why}PR body text reached state.json\n"; }
+}
+
+# tracker-ci-rollup (#645) — ci from statusCheckRollup: none when empty, passing for SUCCESS,
+# SKIPPED and NEUTRAL, pending for an unfinished CheckRun (empty conclusion) or a PENDING status,
+# failing for FAILURE, an ERROR status and any conclusion outside both sets.
+# mutant:645-ci-unknown-fails — makes only named failure conclusions fail, so ACTION_REQUIRED reads
+# passing.
+case_tracker_ci_rollup() {
+  local dir; dir="$(mk_fixture tracker-ci-rollup)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_pr 240 OPEN feature/x)" \
+    "$(tk_pr 241 OPEN feature/x '{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"},{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SKIPPED"},{"__typename":"CheckRun","status":"COMPLETED","conclusion":"NEUTRAL"}]}')" \
+    "$(tk_pr 242 OPEN feature/x '{"statusCheckRollup":[{"__typename":"CheckRun","status":"IN_PROGRESS","conclusion":""}]}')" \
+    "$(tk_pr 243 OPEN feature/x '{"statusCheckRollup":[{"__typename":"StatusContext","state":"PENDING"}]}')" \
+    "$(tk_pr 244 OPEN feature/x '{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]}')" \
+    "$(tk_pr 245 OPEN feature/x '{"statusCheckRollup":[{"__typename":"StatusContext","state":"ERROR"}]}')" \
+    "$(tk_pr 246 OPEN feature/x '{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"ACTION_REQUIRED"}]}')" > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.openPrs[] | [.number, .ci]]' '[[240,"none"],[241,"passing"],[242,"pending"],[243,"pending"],[244,"failing"],[245,"failing"],[246,"failing"]]'
+}
+
+# tracker-open-prs (#645) — every open PR is listed, whatever its branch or author, sorted by
+# number, with its reasons: ci-failing then awaiting-review, none once another login approved, none
+# for a draft; a merged PR is not an open one.
+# mutant:645-open-prs-any-branch — keeps only claude/ head branches, so a human's PR on another
+# branch never appears.
+case_tracker_open_prs() {
+  local dir; dir="$(mk_fixture tracker-open-prs)"
+  build_tracker_env "$dir"
+  tk_arr \
+    "$(tk_pr 253 OPEN claude/9-d '{"isDraft":true,"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]}')" \
+    "$(tk_pr 251 OPEN claude/12-x '{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]}')" \
+    "$(tk_pr 254 MERGED feature/x '{"mergedAt":"2026-01-01T00:00:00Z"}')" \
+    "$(tk_pr 250 OPEN feature/x '{"author":{"login":"bob"}}')" \
+    "$(tk_pr 252 OPEN claude/9-c '{"latestReviews":[{"author":{"login":"carol"},"state":"APPROVED"}],"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]}')" > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.openPrs[].number]' '[250,251,252,253]'
+  tk_jq "$dir" '.openPrs[0]' '{"number":250,"title":"PR 250","url":"https://example.invalid/o/r/pull/250","author":"bob","headRefName":"feature/x","issue":null,"draft":false,"ci":"none","reasons":["awaiting-review"]}'
+  tk_jq "$dir" '[.openPrs[] | [.number, .issue, .draft, .reasons]]' '[[250,null,false,["awaiting-review"]],[251,12,false,["ci-failing","awaiting-review"]],[252,9,false,[]],[253,9,true,[]]]'
+}
+
+# tracker-waiting-on-you (#645) — waitingOnYou composes needs-human issues, plan-proposed issues,
+# each open PR's first reason and each solo merge, sorted by reason order then number; an approved
+# green PR, a draft and a merge by another login are absent; issues[] and counts keep their shape.
+case_tracker_waiting_on_you() {
+  local dir; dir="$(mk_fixture tracker-waiting-on-you)"
+  build_tracker_env "$dir"
+  tk_arr "$(tk_i 8 '["plan-proposed"]' 1)" "$(tk_i 7 '["needs-human"]' 1)" > "$dir/open.json"
+  local green='"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"SUCCESS"}]'
+  local e111 e112
+  e111="{$green}"
+  e112="{$green,\"latestReviews\":[{\"author\":{\"login\":\"bob\"},\"state\":\"APPROVED\"}]}"
+  tk_arr \
+    "$(tk_pr 110 OPEN claude/7-a '{"statusCheckRollup":[{"__typename":"CheckRun","status":"COMPLETED","conclusion":"FAILURE"}]}')" \
+    "$(tk_pr 111 OPEN feature/x "$e111")" \
+    "$(tk_pr 112 OPEN feature/y "$e112")" \
+    "$(tk_pr 113 OPEN feature/z '{"isDraft":true}')" \
+    "$(tk_pr 114 MERGED feature/s '{"mergedAt":"2026-01-01T00:00:00Z","mergedBy":{"login":"alice"}}')" \
+    "$(tk_pr 115 MERGED feature/t '{"mergedAt":"2026-01-01T00:00:00Z","mergedBy":{"login":"bob"}}')" > "$dir/prs.json"
+  run_tracker "$dir"
+  expect_rc 0
+  tk_jq "$dir" '[.waitingOnYou[] | [.kind, .number, .reason]]' '[["issue",7,"needs-human"],["pr",110,"ci-failing"],["pr",111,"awaiting-review"],["issue",8,"plan-proposed"],["pr",114,"solo-merge"]]'
+  tk_jq "$dir" '[.issues[] | [.number, .state]]' '[[7,"needs-human"],[8,"planned"],[20,"done"],[21,"not-planned"],[22,"done"]]'
+  tk_jq "$dir" '.counts' '{"needs-human":1,"planned":1,"done":2,"not-planned":1,"total":5,"waiting":0}'
+}
+
+# tracker-waiting-autonomy (#645) — a plan-proposed issue is listed unless CLAUDE.md has a "Plan
+# auto-approval policy" heading or an "Autonomy mode" section whose first fence's first mode: line
+# is autonomous; a heading only inside a fence, another mode value, or a later fence does not count.
+# mutant:645-autonomy-inert — treats any "Autonomy mode" section as on whatever its mode value, so
+# mode: off and a later fence's autonomous both suppress the plan-proposed item.
+case_tracker_waiting_autonomy() {
+  local dir want='[["issue",2,"plan-proposed"]]'; dir="$(mk_fixture tracker-waiting-autonomy)"
+  build_tracker_env "$dir"
+  tk_arr "$(tk_i 2 '["plan-proposed"]' 1)" > "$dir/open.json"
+  printf '[]\n' > "$dir/prs.json"
+  tk_wa() { # EXTRA_CLAUDE_MD_TEXT EXPECTED
+    tk_claude "$dir" 'url: https://example.invalid/artifact/abc'
+    printf '%s' "$1" >> "$dir/work/CLAUDE.md"
+    run_tracker "$dir"
+    expect_rc 0
+    tk_jq "$dir" '[.waitingOnYou[] | [.kind, .number, .reason]]' "$2"
+  }
+  tk_wa '' "$want"
+  tk_wa $'\n## Plan auto-approval policy\n\nAuto.\n' '[]'
+  tk_wa $'\n## Autonomy mode\n\n```\nmode: autonomous\n```\n' '[]'
+  tk_wa $'\n## Autonomy mode\n\n```\nmode: off\n```\n' "$want"
+  tk_wa $'\n## Autonomy mode\n\n```\nmode: off\n```\n\n```\nmode: autonomous\n```\n' "$want"
+  tk_wa $'\n```\n## Plan auto-approval policy\n```\n' "$want"
+}
+
+# tracker-query-failed-issues-recent (#644) — a failing recent-closed search, or one that returns a
+# non-array, skips with the site named, exit 1, and removes a stale state.json.
+# mutant:644-recent-fail-open — neutralises both failure arms of the recent-closed query, so a
+# failed search builds the snapshot from an empty recent list instead of skipping.
+case_tracker_query_failed_issues_recent() {
+  tk_query_failed tracker-query-failed-issues-recent issues-recent
+  local dir; dir="$(mk_fixture tracker-query-failed-issues-recent-shape)"
+  build_tracker_env "$dir"
+  printf '{}\n' > "$dir/recent-issues.json"
+  run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=query-failed site=issues-recent')" ] || { __ok=0; __why="${__why}stdout: expected skip/issues-recent for a non-array, got $planning_out\n"; }
+  tk_no_state "$dir"
+}
+
+# tracker-recent-truncated (#644) — reaching the recent closed-issue limit sets truncated; one
+# short of it does not.
+case_tracker_recent_truncated() {
+  local dir; dir="$(mk_fixture tracker-recent-truncated)"
+  build_tracker_env "$dir"
+  jq -n -c '[range(0;199) | {number:(. + 300),title:"t",url:"https://example.invalid/x",state:"CLOSED",stateReason:"COMPLETED",closedAt:"2026-01-01T00:00:00Z"}]' > "$dir/recent-issues.json"
+  run_tracker "$dir"
+  expect_rc 0
+  expect_floor_line "truncated=false"
+  jq -n -c '[range(0;200) | {number:(. + 300),title:"t",url:"https://example.invalid/x",state:"CLOSED",stateReason:"COMPLETED",closedAt:"2026-01-01T00:00:00Z"}]' > "$dir/recent-issues.json"
+  run_tracker "$dir"
+  expect_rc 0
+  expect_floor_line "truncated=true"
+  tk_jq "$dir" '.truncated' true
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -13865,6 +14121,16 @@ cases=(
   "tracker-template-generic|case_tracker_template_generic|#622: the shipped page has no external resource, localStorage or innerHTML, and keeps its @REPO_NAME@ placeholder"
   "tracker-template-matrix-states|case_tracker_template_matrix_states|#647: the template's matrix state list and its CSS state rules are the same closed set, the five documented states"
   "tracker-usage|case_tracker_usage|#622: an unknown or extra argument, or no git repository, is exit 2 with no stdout"
+  "tracker-recent-window|case_tracker_recent_window|#644: recent lists PRs merged and issues closed within 14 days of checkedAt, newest first; the search carries the window day; a bad date skips"
+  "tracker-recent-pr-fields|case_tracker_recent_pr_fields|#644: a recent PR row carries logins, linked issue, ci and verifier, and no display name reaches state.json"
+  "tracker-solo-merge|case_tracker_solo_merge|#644: soloMerge needs the same author and merger and no non-author approval; the author's own approval is not a second review"
+  "tracker-verifier-token|case_tracker_verifier_token|#644: the verifier is the last matching status line for the linked issue within the four-token vocabulary, and no other body text is kept"
+  "tracker-ci-rollup|case_tracker_ci_rollup|#645: ci is none, passing, pending or failing from the rollup, an unknown conclusion reading failing"
+  "tracker-open-prs|case_tracker_open_prs|#645: every open PR is listed on any branch, sorted, with ci-failing and awaiting-review reasons and none for a draft or an approved PR"
+  "tracker-waiting-on-you|case_tracker_waiting_on_you|#645: waitingOnYou composes needs-human, ci-failing, awaiting-review, plan-proposed and solo-merge items in reason order"
+  "tracker-waiting-autonomy|case_tracker_waiting_autonomy|#645: plan-proposed is suppressed only by a fence-aware auto-approval policy heading or an autonomous Autonomy mode section"
+  "tracker-query-failed-issues-recent|case_tracker_query_failed_issues_recent|#644: a failing or non-array recent-closed search skips, removes the stale state.json"
+  "tracker-recent-truncated|case_tracker_recent_truncated|#644: reaching the recent closed-issue limit sets truncated"
 )
 
 # MEASURED MUTANTS (#275/#281) — #281 replaced #275's exclusion-based $planC test
