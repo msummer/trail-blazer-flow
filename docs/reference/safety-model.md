@@ -1238,14 +1238,16 @@ one per recorded `<!-- harness-status: … -->` line (merge lines included) plus
 from `issue-implementer`'s "Run journal" bullet — `pr-opened`, `impl-blocked`, `escalated` and
 `skipped` (`reason=foreign-worktree`, a stale worktree that is not ours holding a branch the batch
 needs; the run continues). A full-auto run (#623) adds `stage=planner outcome=auto-approved
-reason=full-auto` per approval and `reason=full-auto` on each merge record. A run that stops early adds one run-level record,
+reason=full-auto` per approval and `reason=full-auto` on each merge record, and, for its one
+fix forward (#635), `stage=scope issue=<fix> outcome=added reason=fix-forward`. A run that stops early adds one run-level record,
 `harness-lock.sh journal <run-id> stage=run outcome=stopped reason=<r>` (#533), with no `issue`
 key and no other optional key; `<r>` is one of the closed vocabulary `RUN_STOP_REASONS` (`--help`
 lists it): `red-baseline`, `dirty-tree`, `stop-switch` (the stop switch read `stop=true`),
 `stop-unknown` (`stop=unknown` or an undocumented exit status), `nothing-to-do` (a standalone
 implementer run with an empty ready list), and the Codex-only `preflight` (any other preflight
-stop after `acquire`) and `permission-denied` (a stop with no issue in hand). Any other value exits
-2 and writes nothing.
+stop after `acquire`) and `permission-denied` (a stop with no issue in hand), and
+`post-merge-ci` (a full-auto run's post-merge CI watch ended `pending` or `unknown`, or its fix
+forward for a CI-detected red stopped). Any other value exits 2 and writes nothing.
 Each line is one JSON object, `"v":1`, with keys in a fixed order: `ts`, `run_id`, `event`
 (`acquire`, `release`, `release-force`, `stage`), `session`, then the event's own keys (`host`,
 `pid`, `harness_version` and, after a stale reclaim, `reclaimed_run_id` on `acquire`; the

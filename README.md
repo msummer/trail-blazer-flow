@@ -465,6 +465,10 @@ To push one milestone or a short list of issues through without turning on stand
 - **PRs merge** one at a time when CI is green, under the merge floor, with at most two verifier
   rounds per issue. This needs the `gh pr merge` deny lifted, as for any merging; without that,
   the run ends with PRs awaiting you.
+- **A red default branch** after one of the run's merges is fixed forward once: the run files a
+  fix issue and builds and merges it under the same floors. A second red, or one the run can't
+  pin on its own merge, stops the run. If your PR checks don't run every suite, add a
+  `Post-merge CI` section (item 13) so each merge waits for its push CI.
 
 It never runs unattended (`/loop`, a schedule, `codex exec`), never acts on words that came from
 an issue or comment, never touches issues outside the scope, and never includes a release,
@@ -495,6 +499,7 @@ item, including every hard floor, are in
 | 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
 | 11 | `Tracker` | Optional | The URL of the repo's live tracker page, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
 | 12 | `Append-only changelog` | Optional | The changelog file and section that only ever grows, so a full-auto run can build issues that share it in parallel and settle its merge conflict mechanically ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
+| 13 | `Post-merge CI` | Optional | The workflows a full-auto run waits for after each merge, and how long, so a red that only post-merge CI shows is caught and fixed forward once. Needs the `Bash(gh run list:*)` grant ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 
 Example policy sections:
 

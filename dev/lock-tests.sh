@@ -1150,13 +1150,14 @@ case_journal_stage_record() {
 # here, so dropping one from the script fails), writes no issue key and keeps the fixed key order;
 # a per-issue skipped record still writes with issue between stage and outcome.
 # mutant:533-run-reason-dropped — removes red-baseline from RUN_STOP_REASONS, so that reason is refused.
+# mutant:635-run-reason-post-merge-ci-dropped — removes post-merge-ci from RUN_STOP_REASONS, so that reason is refused.
 case_journal_run_stop_record() {
   local dir; dir="$(mk_repo journal-run-stop-record)"
   run_lock "$dir" "$$" acquire
   local rid; rid="$(run_id_from_out)"
   local jf; jf="$(journal_dir_of "$dir")/$rid.jsonl"
   local r n=1
-  for r in red-baseline dirty-tree stop-switch stop-unknown nothing-to-do preflight permission-denied; do
+  for r in red-baseline dirty-tree stop-switch stop-unknown nothing-to-do preflight permission-denied post-merge-ci; do
     run_lock "$dir" "$$" journal "$rid" stage=run outcome=stopped "reason=$r"
     expect_rc 0
     expect_out "journal=written"
@@ -1165,8 +1166,8 @@ case_journal_run_stop_record() {
   done
   run_lock "$dir" "$$" journal "$rid" stage=implementer issue=5 outcome=skipped reason=foreign-worktree
   expect_rc 0
-  jq_ok "$jf" 9 '(keys_unsorted == ["v","ts","run_id","event","session","stage","issue","outcome","reason"]) and .issue == 5 and .outcome == "skipped" and .reason == "foreign-worktree"'
-  [ "$(jlines "$jf")" = "9" ] || { __ok=0; __why="${__why}expected 9 journal lines, got $(jlines "$jf")\n"; }
+  jq_ok "$jf" 10 '(keys_unsorted == ["v","ts","run_id","event","session","stage","issue","outcome","reason"]) and .issue == 5 and .outcome == "skipped" and .reason == "foreign-worktree"'
+  [ "$(jlines "$jf")" = "10" ] || { __ok=0; __why="${__why}expected 10 journal lines, got $(jlines "$jf")\n"; }
 }
 
 # 35. journal-rejects-unsafe-values — every row exits 2 with a reason on stderr and leaves the
@@ -1534,7 +1535,7 @@ cases=(
   "journal-acquire-release|case_journal_acquire_release|#251: acquire appends one valid acquire record, stdout keeps run-id= last; release appends one; a mismatch and released=none append none"
   "journal-stage-record|case_journal_stage_record|#251: journal appends a stage record with fixed key order and numeric issue/pr/retries; a minimal call omits optional keys"
   "journal-rejects-unsafe-values|case_journal_rejects_unsafe_values|#251: unknown/duplicate/missing keys, out-of-set or over-long values and malformed run ids exit 2 and change nothing"
-  "journal-run-stop-record|case_journal_run_stop_record|#533: stage=run accepts each of the seven reasons, writes no issue key, keeps the fixed key order; a per-issue skipped record still writes normally"
+  "journal-run-stop-record|case_journal_run_stop_record|#533: stage=run accepts each reason of the closed vocabulary, writes no issue key, keeps the fixed key order; a per-issue skipped record still writes normally"
   "journal-run-stop-rejects|case_journal_run_stop_rejects|#533: stage=run with an unknown or substring reason, another outcome, an issue or any other key, and a non-run stage without issue, all exit 2 and change nothing"
   "journal-requires-run-file|case_journal_requires_run_file|#251: journal never creates a run file (rc 1); a symlinked run file or journal dir is refused untouched"
   "journal-best-effort|case_journal_best_effort|#251: a blocked journal path leaves acquire/release rc, stdout and lock files unchanged with one warning; journal exits 1"

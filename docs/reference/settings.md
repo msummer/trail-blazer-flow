@@ -18,6 +18,8 @@ follow-up issue numbers, and replacing the verifier status line and mutation-pro
 fresh verdict's after a CI-fix round; `gh pr comment` is deliberately **not** granted — the
 verifier's verdict is archived on the *issue* instead (`Bash(gh issue comment:*)`, already
 granted), which is also where the merge pass reads it back with one `gh issue view` call.
+`Bash(gh run list:*)` is used only by a full-auto run's post-merge CI watch (item 13); it is
+read-only, and without it the watch stops the run naming the grant.
 `Bash(gh pr update-branch:*)` is used only by the serial merge train's update-branch fallback
 (item 9; a full-auto run reuses it) — it merges the default branch into a held PR's own branch, never `--rebase`, and never
 touches the default branch itself. `Bash(changelog-merge.sh:*)` is used by a full-auto run's approval overlap check and wave planning

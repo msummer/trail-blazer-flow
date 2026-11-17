@@ -536,6 +536,32 @@ generic subagents need:
     git or build step, no single merge base, a moved or missing origin branch. Only a single contiguous insertion is settled; a changelog organised in subsections
     (Keep a Changelog's `### Added`) holds whenever the lane's bullet is not at an edge.
 
+13. **Post-merge CI** (optional) — a section titled exactly "Post-merge CI" at any heading depth,
+    whose first fenced block names the workflows whose push run a full-auto run waits for after
+    each merge, for a repo whose PR checks do not run every suite:
+
+        ## Post-merge CI
+
+        ```
+        workflow: selfcheck
+        wait: 45
+        ```
+
+    `workflow:` appears one or more times, each a workflow `name:` of letters, digits, spaces and
+    `. _ -`, 1 to 100 characters. `wait:` is optional, whole minutes from 1 to 60, default 30.
+    Blank lines and `#` comment lines are allowed; any other line, a bad value, a repeated
+    `wait:`, no `workflow:` line, or no fence makes the section malformed. It is read only by a
+    full-auto run on Claude Code (`skills/issue-cycle/references/full-auto.md`'s "Post-merge CI
+    watch"); no section means no watch, never an error, a malformed one stops that run at the
+    start, and the doctor does not validate it. It needs the `Bash(gh run list:*)` grant in
+    `templates/repo-settings.json`.
+
+    What the declaration changes: each merge waits, up to `wait` minutes, for the declared
+    workflows' push run on the merge commit, so merges serialise at CI pace. A red run on a merge
+    whose parent commit was green is fixed forward once (see [workflow.md](workflow.md)'s "Full
+    auto"); a run still pending when the wait is spent, any other result, or a failed query stops
+    the run with a report.
+
 The subagents read `CLAUDE.md` at the start of every task — it is the real input that makes
 the harness work well in a given repo. Too little and they're guessing; too much and the
 contract above drowns in restatement of what the file system, manifests, and linter config
@@ -592,7 +618,8 @@ across sessions rather than a memory of one chat. Written by `harness-setup`, re
 automatically by the implementer/cycle pre-flight whenever the default branch moves past the
 recorded commit (green → new baseline; red → the run stops, because a broken main makes every
 failure unattributable — that's also the mechanical "two green PRs can still compose badly"
-check). It is **machine-local state, not a project document**: keep it gitignored
+check — except that a full-auto run fixes forward one red it can pin on its own merge,
+[workflow.md](workflow.md)'s "Full auto"). It is **machine-local state, not a project document**: keep it gitignored
 (`harness-setup` adds the entry; the doctor warns if it's missing or tracked), and never edit
 it by hand. `harness-setup` and the implementer/cycle refresh both always write the full SHA; the
 doctor's compare against it tolerates an abbreviated recorded value of 7 or more hex characters

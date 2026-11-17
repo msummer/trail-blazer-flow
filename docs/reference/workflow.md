@@ -399,7 +399,7 @@ this section is its prose summary.
   named. If in doubt the run is a normal cycle and reports `full auto: not applied — <reason>`.
 - **Scope.** A milestone is resolved once with one `gh issue list` query; a failed query, an
   empty result or exactly 100 results stops the run. The list is frozen: follow-ups filed during
-  the run are out. Out-of-scope issues get no dispatch, label or comment.
+  the run are out, except the one fix-forward issue below. Out-of-scope issues get no dispatch, label or comment.
 - **Waves.** Up to 4 in-scope issues with pairwise-disjoint Affected areas form a wave, built in
   worktree-parallel mode (a single-issue wave is sequential). The one changelog file a repo
   declares in its "Append-only changelog" section (`bin/changelog-merge.sh --declared`) is left
@@ -412,15 +412,31 @@ this section is its prose summary.
 - **Budgets and stops.** One kickback (two verifier rounds), or a lower declared
   `kickback-budget:`; the wording fast path stays outside the budget. A failure after round 2
   blocks that issue and the run continues. The stop switch is checked at the same points as the
-  serial train. The ratchet pass does not run.
+  serial train, plus once before a fix forward files its issue. The ratchet pass does not run.
+- **Fix forward.** A red default branch the run can pin on a merge it confirmed is fixed forward
+  once per run, on Claude Code only. The pin is mechanical: the local tip is the merge commit,
+  and either the local baseline's recorded commit is that merge's first parent and the failing
+  commands fail again on a re-run, or (with the watch below) every declared workflow is red on
+  the merge commit and green on its parent. The run files one issue carrying the failing output,
+  adds it to the frozen scope, and plans, approves (under the same hard floor), builds and
+  merges it through the unchanged merge floor, reserve check and governance hold. When it lands
+  green the run resumes. A second red, a red it cannot pin, a plan that does not approve, or any
+  hold on the fix stops the run exactly as before.
+- **Post-merge CI.** Opt-in: a repo whose `CLAUDE.md` declares a "Post-merge CI" section (item 13
+  of the contract) makes each merge wait, up to its `wait` minutes, for the declared workflows'
+  push run on the merge commit. Green continues; red feeds fix forward; still pending when the
+  wait is spent, or any other result, stops the run. Merges then serialise at CI pace, and the
+  watch needs the `Bash(gh run list:*)` grant.
 - **Provenance and audit.** Each approval posts the plan, then the label, then an audit comment
   whose first line is `<!-- harness-audit -->` naming the grant, then journals
   `stage=planner outcome=auto-approved reason=full-auto`; each merge's journal record adds
   `reason=full-auto`. Approval provenance is unchanged, so `merge-floor.sh`'s `binding` and
   `post-approval` checks run as usual.
-- **Codex.** Only the scope applies: no grant, no worktrees, no merges.
+- **Codex.** Only the scope applies: no grant, no worktrees, no merges, no fix forward and no
+  post-merge CI watch.
 - **Not covered.** Overlap with an out-of-scope open PR is not checked, and a red default branch
-  after a merge stops the run rather than being fixed forward.
+  the run cannot pin on its own confirmed merge, or a second one, stops the run rather than being
+  fixed forward.
 
 ## The test-suite ratchet (opt-in)
 

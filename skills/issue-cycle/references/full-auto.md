@@ -28,7 +28,10 @@ auto".
 - A failed query, an empty result, or exactly 100 results (possibly truncated) stops the run with
   a report; release the lock on the way out.
 - The scope is frozen for the run: issues added later (follow-ups filed during the run included)
-  are out. Print the resolved list in the report.
+  are out, except the one fix-forward issue (see "Fix forward"). Print the resolved list in the
+  report.
+- Right after the scope is resolved, read the "Post-merge CI" section (see "Post-merge CI
+  watch"); a malformed one stops the run there.
 
 ## Authority
 
@@ -119,14 +122,125 @@ fallback as written, with these differences.
 When step 3's merge pass is not active for this run, every merge step is skipped and rules
 (b)–(d) still apply.
 
+## Post-merge CI watch
+
+Optional, and only for a repo whose `CLAUDE.md` declares a "Post-merge CI" section
+(`docs/reference/claude-md-contract.md`, item 13): its PR checks do not run every suite, so a
+merge can turn the default branch red where no pull request could show it. No section means no
+watch, silently.
+
+- **Read.** Once, right after the scope is resolved. A malformed section (the item's own rules)
+  stops the run there, naming the offending line, and releases the lock, as a failed scope query
+  does. `wait` is the declared minutes (1–60), default 30.
+- **When.** After every merge this run confirms (Phase A or Phase B), once the "One at a time"
+  refresh is green, guard (e) has passed and the merge-commit ancestry check has passed. For a
+  Phase A merge, read the oid first (`gh pr view <pr> --json mergeCommit --jq .mergeCommit.oid |
+  tr -d '\r'`) and run the same `git merge-base --is-ancestor <oid> <default-branch>` check;
+  anything but exit 0 is train-stopping, as in Phase B.
+- **Poll.** One call per declared workflow:
+  `gh run list --workflow "<name>" --commit <oid> --event push --limit 20 --json databaseId,status,conclusion,url --jq '.[] | "\(.databaseId) \(.status) \(if .conclusion == "" then "-" else .conclusion end) \(.url)"'`
+  (a run that is not completed prints `-` as its conclusion).
+- **Classify** the workflows together, first match wins in this order:
+  - `unknown`: a non-zero exit, a denial, a line that does not parse, or a completed run whose
+    conclusion is none of `success`, `skipped`, `neutral`, `failure`;
+  - `red`: any run `completed failure`;
+  - `pending`: some workflow has no line yet, or some run is not `completed`;
+  - `green`: every workflow has at least one line, and every line is `completed` with
+    `success`, `skipped` or `neutral`.
+- **Wait.** On `pending`, `sleep 60` and poll again, at most `wait` polls in all. A spent
+  budget is `pending`. If `sleep` is denied, poll once more immediately, then `pending` with
+  "backoff unavailable — grant `Bash(sleep:*)`". If `gh run list` is denied, the result is
+  `unknown`, naming the grant `Bash(gh run list:*)`.
+- **Outcome.** `green`: continue. `red`: Fix forward's attribution decides. `pending` or
+  `unknown`: train-stopping, with the lock released at step 5 and the journal
+  `harness-lock.sh journal <run-id> stage=run outcome=stopped reason=post-merge-ci`; quote the
+  last poll's lines and never guess, never run another query in its place.
+- **Report.** One line per merge: `post-merge-ci: PR #<pr> <first 12 of oid> <state> <run urls>`.
+
+## Fix forward (one red default branch per run)
+
+A narrow exception to the red-baseline STOP: one red default branch per run, on Claude Code, is
+fixed forward by a single new issue instead of ending the run. It adds no authority beyond the
+grant above.
+
+**When.** Only if ALL of these hold; any other red is train-stopping, exactly as `serial-train.md`'s
+Queue policy says:
+
+1. a full-auto grant is in effect on Claude Code;
+2. the red follows a merge this run confirmed (guard (d) `MERGED`, in Phase A or Phase B);
+3. no fix forward has started yet this run;
+4. no merge-halting event has occurred this run;
+5. the red is attributable by the tests below;
+6. `harness-stop.sh` run at that moment exits 0.
+
+**Attribution.** Any doubt means not attributable. Let `<oid>` be the merge's `mergeCommit` oid.
+
+- Always: `git rev-parse <default-branch>` equals `<oid>`.
+- A local baseline red: `git rev-parse <oid>^1` equals the `- commit:` SHA in
+  `.claude/BASELINE.md` (a missing file or a mismatch is not attributable), and every failing
+  verification command fails again on one immediate re-run on the same tip.
+- A CI red (the watch above): every declared workflow is classified `red` on `<oid>` and `green`
+  on `<oid>^1`, by one query each and no wait.
+
+**Steps**, in order:
+
+1. **Stop check.** Run `harness-stop.sh`; take `SKILL.md`'s between-passes stop path on exit 3,
+   4 or any undocumented status.
+2. **Pause.** No floor evaluation, merge or wave dispatch until the fix reaches a terminal
+   outcome.
+3. **File** one issue, never retried: `gh issue create --title "Fix forward: <default-branch>
+   red after PR #<pr>" --body-file <tempfile>`, adding `--milestone "<title>"` only when the
+   scope was `milestone:<title>`. No label; never `no-plan`, `test-ratchet` or
+   `no-auto-approve`. Body line 1 is `<!-- harness-fix-forward: PR #<pr> -->` and line 2
+   `<!-- harness-version: <version> <sha> -->` (never `<!-- harness-follow-up: PR #`). The body
+   names the run id, the grant as typed, the date, the merged PR's URL and its issue, the
+   last-green and red SHAs, and the detector (`baseline` or `post-merge-ci`). It quotes at most
+   40 lines of the failing output verbatim, inside a fence longer than any backtick or tilde
+   run they contain, labelled as evidence, and ends with one fixed goal sentence: "Make the
+   default branch green again by the smallest change; reverting the merged PR is allowed."
+4. **Record.** Add the issue to the in-context scope and a `<fix> seed -` ledger row, then run
+   `harness-lock.sh journal <run-id> stage=scope issue=<fix> outcome=added reason=fix-forward`.
+5. **Plan.** Invoke `issue-planner` as step 1 does, restricted to the fix issue: its discovery
+   (`find-planning-work.sh`, no `--carry-over`) must list the fix in `needs_initial_plan` with
+   `trusted_author: true`, or the run stops. Every other discovered issue counts as
+   "skipped-with-reason: fix forward in progress". Step 6b runs under this grant with its hard
+   floor unchanged and the approval order above; its audit comment also says `fix forward for
+   PR #<pr>`. A plan that does not auto-approve stops the run.
+6. **Implement.** Run the implementer's step 1 once, keep only the fix issue, and run it as a
+   wave of one, sequential. Rule (c) does not hold it back; rule (f) applies.
+7. **Merge.** Step 3's per-PR evaluation, reserve check and judgment checks, unchanged. Any
+   floor hold or merge-halting event on this PR is train-stopping, because the branch is still
+   red.
+8. **After the merge.** The usual refresh, guard (e), ancestry check and watch. Green: resume
+   the interrupted wave's unevaluated PRs in order (the update-branch fallback applies), then
+   the later waves. Anything else stops the run.
+
+**Stops.** The run is train-stopping, with the lock released at step 5, and never attempts a
+second fix forward, on any of: a second red after a fix forward started (the fix's own
+post-merge refresh or watch included); a watch result of `pending` or `unknown`; a failed
+issue create; the fix issue missing from `needs_initial_plan`; a plan that does not
+auto-approve; an implementer `blocked`, `incomplete` or `died`, or no PR; any floor hold or
+merge-halting event on the fix PR. The journal reason is `red-baseline` for a local red and
+`post-merge-ci` for a CI-detected red, `pending` or `unknown`.
+
+**Report.** One line: `fix forward: #<fix> for PR #<pr> (<baseline|post-merge-ci>) — <final
+state>`.
+
+**Limits.** Attribution and the watch's classification are prompt-enforced; nothing mechanical
+checks them. A rebase-method merge of more than one commit is never attributable, because
+`<oid>^1` is then another of the PR's own commits, not the last-green tip. A flaky CI red is not re-run (`gh run rerun` is a write and
+is not granted), so the plan should surface it as BLOCKING. The fix issue's body is
+model-authored, and only the hard floor and the PR gate stand between it and a merge.
+
 ## Passes skipped
 
 The ratchet pass (step 4) does not run.
 
 ## Stops
 
-No new check point: `serial-train.md`'s Stop-check mapping, worktree mode's stop check before
-every new launch, and `merge-floor.sh`'s own per-PR check.
+No new check point except fix forward's one stop check before filing: `serial-train.md`'s
+Stop-check mapping, worktree mode's stop check before every new launch, and `merge-floor.sh`'s
+own per-PR check.
 
 ## Report
 
@@ -138,8 +252,8 @@ usual.
 
 ## Codex
 
-Only the scope applies: no grant, no waves or worktrees, no merges, the normal Codex kickback
-budget, and one report line saying so.
+Only the scope applies: no grant, no waves or worktrees, no merges (so no fix forward and no
+post-merge CI watch), the normal Codex kickback budget, and one report line saying so.
 
 ## Honest limits
 
