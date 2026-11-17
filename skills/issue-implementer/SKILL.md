@@ -363,7 +363,7 @@ anything**: on the clean default branch, run the project's verification commands
 **Green** → rewrite `.claude/BASELINE.md` with the new commit SHA (the full 40-char SHA, from
 `git rev-parse HEAD`), today's date, and each command's outcome (e.g. "pytest: 631 passed").
 **Red** → STOP the whole run (journal `reason=red-baseline`) and report prominently; fixing main
-is the human's call.
+is the human's call (bar one full-auto fix forward: `issue-cycle`'s `references/full-auto.md`).
 
 Then install dependencies using the project's setup command from CLAUDE.md (e.g. `pnpm install`);
 skip if the project has no dependency step.

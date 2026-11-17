@@ -427,7 +427,8 @@ Run this check at five named points: the step-0 check (immediately after the loc
 pre-implementation check (before step 2), the pre-merge-pass check (before step 3), the per-PR
 check (once per PR; `merge-floor.sh` runs it as its first step and applies this same status
 mapping, `floor=stop` being the stop path and `stop-check=install-fault` the install-fault
-exception), and the pre-ratchet check (before step 4):
+exception), and the pre-ratchet check (before step 4); a full-auto run adds one before it files
+a fix-forward issue (`references/full-auto.md`):
 ```bash
 harness-stop.sh
 ```
@@ -468,8 +469,8 @@ step 5.
   routine; each invocation stays ONE bounded pass — recurrence is the wrapper's job, never this
   skill's (never polls for new work or repeats a pass; the merge pass's bounded waits — guard
   (e)'s declared deploy wait, the pre-first-merge recheck, the one-shot
-  re-read of a transiently failed read, and the serial train's update-branch CI wait — are the
-  four bounded exceptions). On Codex there is no `/loop`: recurrence is `bin/codex-scheduled-run.sh`
+  re-read of a transiently failed read, the serial train's update-branch CI wait, and a full-auto
+  run's declared post-merge CI watch — are the five bounded exceptions). On Codex there is no `/loop`: recurrence is `bin/codex-scheduled-run.sh`
   under a launchd LaunchAgent (`docs/reference/codex.md` "Scheduling unattended runs (macOS)").
 - **Single-flight:** mechanically enforced by `harness-lock.sh`, an atomic `mkdir` under
   `<git-common-dir>/trail-blazer/lock` acquired at step 0 and released at step 5 (see step 0
@@ -492,10 +493,10 @@ step 5.
   grant, cite that file's "Authority") and hard floor (step 3, and the `merge-floor.sh` it runs),
   nowhere else; the ratchet pass files
   issues and nothing else; never touch a dirty tree that isn't the harness's own.
-- **Fail towards the human.** Any pass in an unexpected state (red baseline, repeated crash
-  recovery on the same issue, discovery truncation that won't drain, a resume cap exceeded, an
-  exhausted retry ladder) stops that issue's progress and reports, rather than looping through
-  the damage.
+- **Fail towards the human.** Any pass in an unexpected state (red baseline, bar a full-auto
+  run's one fix forward; repeated crash recovery on the same issue, discovery truncation that
+  won't drain, a resume cap exceeded, an exhausted retry ladder) stops that issue's progress and
+  reports, rather than looping through the damage.
 - **No stage skipped but unreported.** Every ledger row gets an outcome (success, blocked, or
   escalated) for every stage it reached — enforced by the pre-advance checks per pass and the
   closing reconciliation in step 5.

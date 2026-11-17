@@ -26,7 +26,7 @@ to its file.
 | Section | File |
 |---|---|
 | "Starting a new project", "Planning", "Approval", "Implementation", "Resilience: checkpointing, retries, and the dispatch ledger", "After the human merges", "The steady state, as one command", "Full auto (one run, a named scope)", "The test-suite ratchet", "Working the human gates from the phone" (with its "Returning to a laptop" and "Stopping a cycle" paragraphs), "Label lifecycle" | [workflow.md](workflow.md) |
-| "The CLAUDE.md contract" (items 1–11: "Plan auto-approval policy", "Merge autonomy policy", "Post-merge verification", "Test-suite ratchet policy", "Autonomy reserve", "Autonomy decision record", "Autonomy mode", "Governance paths", "Tracker"), "The LESSONS.md contract", "The BASELINE.md contract" | [claude-md-contract.md](claude-md-contract.md) |
+| "The CLAUDE.md contract" (items 1–13: "Plan auto-approval policy", "Merge autonomy policy", "Post-merge verification", "Test-suite ratchet policy", "Autonomy reserve", "Autonomy decision record", "Autonomy mode", "Governance paths", "Tracker", "Append-only changelog", "Post-merge CI"), "The LESSONS.md contract", "The BASELINE.md contract" | [claude-md-contract.md](claude-md-contract.md) |
 | "The per-repo settings file" | [settings.md](settings.md) |
 | "Safety model" (with its "Five PreToolUse hooks", "Known gaps", "Known over-blocks", "Live-probe record", "Verdict provenance", "Approval provenance", and "One active cycle per checkout" paragraphs) | [safety-model.md](safety-model.md) |
 | "What's in here", "The model tiering", "Distribution" | [architecture.md](architecture.md) |

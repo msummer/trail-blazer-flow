@@ -18,6 +18,9 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
+- #635: full auto fixes forward one red default branch per run (files, plans, approves and merges
+  a fix issue under every floor); an optional "Post-merge CI" section (item 13) makes each merge
+  wait for its push CI. Consumer step: add `Bash(gh run list:*)` (re-copy the permissions block).
 - #647: the tracker gains a matrix section kind, a status grid whose cells show a closed set of
   coloured states. Hand-written sections only; an existing tracker shows it after its page is
   re-published.

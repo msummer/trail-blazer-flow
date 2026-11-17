@@ -137,7 +137,7 @@ LOCK_SUBCOMMANDS="acquire release status journal"
 JOURNAL_KEEP=500
 
 # Closed vocabulary of run-level stop reasons for `journal ... stage=run` (one line; --help echoes it).
-RUN_STOP_REASONS="red-baseline dirty-tree stop-switch stop-unknown nothing-to-do preflight permission-denied"
+RUN_STOP_REASONS="red-baseline dirty-tree stop-switch stop-unknown nothing-to-do preflight permission-denied post-merge-ci"
 
 usage() {
   cat <<'EOF'

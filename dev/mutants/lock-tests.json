@@ -378,6 +378,21 @@
       ]
     },
     {
+      "name": "635-run-reason-post-merge-ci-dropped",
+      "target": "bin/harness-lock.sh",
+      "suite": "dev/lock-tests.sh",
+      "filter": "journal-",
+      "edits": [
+        {
+          "from": " permission-denied post-merge-ci\"",
+          "to": " permission-denied\""
+        }
+      ],
+      "expect_fail": [
+        "journal-run-stop-record"
+      ]
+    },
+    {
       "name": "533-run-keys-partial",
       "target": "bin/harness-lock.sh",
       "suite": "dev/lock-tests.sh",
