@@ -3098,8 +3098,9 @@ case_push_cmdcap_noop_at_cap() {
   run_push_guard "$(mk_push_cmd_big "$pcap_text" "$dir")"
   expect_push_no_opinion
 }
-# mutant:517-pg-cmdcap-chars -- counts characters in a UTF-8 locale instead of bytes, so a payload over
-#   the cap in bytes but under it in characters is analysed.
+# mutant:517-pg-cmdcap-chars -- with the hook's top-level C locale also removed, counts characters in a
+#   UTF-8 locale instead of bytes, so a payload over the cap in bytes but under it in characters is
+#   analysed.
 case_push_cmdcap_deny_multibyte() {
   local dir="$tmpbase/repo-pp" pre='git push origin feature/x; echo ' mb
   mk_fixture_repo "$dir" main feature/x
@@ -7312,12 +7313,17 @@ case_cdg_dbq_deny_quoted_prefix() {
 # mutant:457-cdg-dl-cwd-cap-bash-off — the same for the Bash route's inline-patch cwd check.
 # mutant:457-cdg-dl-patch-marker-uncapped — the native route stops line-capping a `*** ` marker
 #   line, so an over-cap header line reaches the parser.
-# mutant:457-cdg-dl-bytes-off-prepare — cdg_prepare_text measures characters, not bytes.
+# mutant:457-cdg-dl-bytes-off-prepare — with the hook's top-level C locale also removed,
+#   cdg_prepare_text measures characters, not bytes.
 # mutant:457-cdg-dl-bytes-late-prepare — cdg_prepare_text measures the whole text before scoping
-#   LC_ALL=C, so the whole-text cap counts characters.
-# mutant:457-cdg-dl-cwd-chars — the apply_patch route measures cwd in characters.
-# mutant:457-cdg-dl-cwd-chars-bash — the Bash route measures cwd in characters.
-# mutant:457-cdg-dl-bytes-off-fn — cdg_bytes measures characters, not bytes.
+#   LC_ALL=C (and the hook's top-level C locale is also removed), so the whole-text cap counts
+#   characters.
+# mutant:457-cdg-dl-cwd-chars — with the hook's top-level C locale also removed, the apply_patch
+#   route measures cwd in characters.
+# mutant:457-cdg-dl-cwd-chars-bash — with the hook's top-level C locale also removed, the Bash
+#   route measures cwd in characters.
+# mutant:457-cdg-dl-bytes-off-fn — with the hook's top-level C locale also removed, cdg_bytes
+#   measures characters, not bytes.
 # mutant:457-cdg-dl-text-cap-off — the whole-text size check becomes a no-op, so an over-cap native
 #   patch reaches the parser, which denies at its unrecognised-marker probe line instead of the
 #   too-large line.

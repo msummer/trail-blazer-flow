@@ -57,7 +57,7 @@
 # the harmless commands it denies are listed in docs/reference/safety-model.md, under "Known gaps" and
 # "Known over-blocks".
 set -uo pipefail
-
+export LC_ALL=C
 # --- vocabulary --------------------------------------------------------------------------------
 # One-line KEY="value" declarations, so dev/selfcheck.sh (4.39) can extract the two AGENT_TYPES_* lines
 # mechanically; keep their exact shape.

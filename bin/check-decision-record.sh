@@ -53,7 +53,7 @@
 #
 # Requires: gh (authenticated), jq. Read-only — makes no mutating gh call, writes no file.
 set -uo pipefail
-
+export LC_ALL=C
 usage() {
   cat <<'EOF'
 usage: check-decision-record.sh <issue-number>

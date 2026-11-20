@@ -12844,6 +12844,7 @@ tk_write_git() {
     printf '#!%s\n' "$bash_bin"
     cat <<'EOF'
 printf '%s\n' "$*" >> "__DIR__/.git-calls"
+printf '%s\n' "${LC_ALL-unset}" >> "__DIR__/.git-locale"
 case "$1 $2" in
   "rev-parse --show-toplevel")
     if [ -f "__DIR__/not-a-repo" ]; then echo "fatal: not a git repository" >&2; exit 128; fi
@@ -12905,6 +12906,18 @@ run_tracker() {
   local dir="$1"
   shift
   ( cd "$dir/work" && PATH="$dir/tbin:$PATH" "$bash_bin" "$root/bin/tracker-sync.sh" "$@" ) >"$dir/.stdout" 2>"$dir/.stderr"
+  planning_rc=$?
+  planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
+  planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
+}
+# run_tracker_locale DIR ARGS... — run_tracker under a collating UTF-8 locale, with a BASH_ENV that
+# turns off globasciiranges so a bash 4.3+ host also collates bracket ranges by locale (bash 3.2 has no
+# such switch and always does). The variables prefix the bash call only, never the case's own shell.
+run_tracker_locale() {
+  local dir="$1"
+  shift
+  printf '%s\n' 'shopt -u globasciiranges 2>/dev/null' > "$dir/bash-env"
+  ( cd "$dir/work" && LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 BASH_ENV="$dir/bash-env" PATH="$dir/tbin:$PATH" "$bash_bin" "$root/bin/tracker-sync.sh" "$@" ) >"$dir/.stdout" 2>"$dir/.stderr"
   planning_rc=$?
   planning_out="$(cat "$dir/.stdout" 2>/dev/null || true)"
   planning_err="$(cat "$dir/.stderr" 2>/dev/null || true)"
@@ -12997,6 +13010,17 @@ tk_malformed() {
   build_tracker_env "$dir"
   if [ -n "${4:-}" ]; then printf '%s\n' "$4" > "$dir/work/CLAUDE.md"; else tk_claude "$dir" "$2"; fi
   run_tracker "$dir"
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'tracker=malformed\nreason=%s' "$3")" ] || { __ok=0; __why="${__why}stdout: expected malformed/$3, got $planning_out\n"; }
+  expect_no_log "$dir/.gh-calls"
+  tk_no_state "$dir"
+}
+# tk_malformed_locale NAME FENCE_BODY TOKEN — tk_malformed through run_tracker_locale.
+tk_malformed_locale() {
+  local dir; dir="$(mk_fixture "$1")"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$2"
+  run_tracker_locale "$dir"
   expect_rc 1
   [ "$planning_out" = "$(printf 'tracker=malformed\nreason=%s' "$3")" ] || { __ok=0; __why="${__why}stdout: expected malformed/$3, got $planning_out\n"; }
   expect_no_log "$dir/.gh-calls"
@@ -13351,6 +13375,68 @@ case_tracker_malformed_bad_section() {
   tk_malformed tracker-malformed-bad-section "$(printf 'section: a')" no-url
   tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\nsections: x')" unknown-key
   tk_malformed tracker-malformed-bad-section "$(printf 'url: https://example.invalid/a\nSection: x')" unknown-key
+}
+
+# mutant:669-tracker-locale-off — removes tracker-sync.sh's top-level `export LC_ALL=C`, so bracket
+# ranges and the child processes follow the caller's collating locale again.
+# tracker-locale-section-id — under LC_ALL=en_US.UTF-8 (and globasciiranges off) an uppercase id, an
+# accented id, an accented path and an accented label are still bad-section / bad-label-state with no
+# gh call and no state.json: the script's own C locale keeps its ranges byte ranges. Killed by
+# 669-tracker-locale-off wherever the host collates en_US.UTF-8 (macOS bash 3.2 always does).
+case_tracker_locale_section_id() {
+  local u e
+  u='url: https://example.invalid/a'
+  e=$'\303\251'
+  tk_malformed_locale tracker-locale-section-id "$(printf '%s\nsection: A docs/x.md#H' "$u")" bad-section
+  tk_malformed_locale tracker-locale-section-id "$(printf '%s\nsection: %s docs/x.md#H' "$u" "$e")" bad-section
+  tk_malformed_locale tracker-locale-section-id "$(printf '%s\nsection: a docs/%s.md#H' "$u" "$e")" bad-section
+  tk_malformed_locale tracker-locale-section-id "$(printf '%s\nlabel-state: %s=parked' "$u" "$e")" bad-label-state
+}
+
+# tracker-locale-child-env — a caller exporting LC_ALL=en_US.UTF-8 still has every child process of
+# the script (the stub) see LC_ALL=C. Killed by 669-tracker-locale-off on every host, since the
+# variable reaches the child whether or not the locale is installed.
+case_tracker_locale_child_env() {
+  local dir seen; dir="$(mk_fixture tracker-locale-child-env)"
+  build_tracker_env "$dir"
+  run_tracker_locale "$dir"
+  expect_rc 0
+  seen="$(sort -u "$dir/.git-locale" 2>/dev/null)"
+  [ "$seen" = "C" ] || { __ok=0; __why="${__why}child LC_ALL values: expected C, got $seen\n"; }
+}
+
+# mutant:669-tracker-url-ascii-off — drops the printable-ASCII url arm, so a url holding a
+# non-ASCII character (which the C locale's [[:space:]]/[[:cntrl:]] no longer see) is accepted.
+# mutant:669-tracker-heading-bytes — restores the ${#head} length test, which counts bytes in the C
+# locale, so a 120-character multibyte heading is rejected.
+# mutant:669-tracker-heading-c1-off — drops the C1-control clause of the jq heading predicate, so a
+# heading with U+0085 (not [[:cntrl:]] in the C locale) is accepted.
+# tracker-c-heading-url — in the C locale a heading is still 1-120 characters (120 x e-acute is
+# accepted, 121 is bad-section), still rejects a C1 control (U+0085), and a url with a non-ASCII
+# character (e-acute, U+3000) is bad-url.
+case_tracker_c_heading_url() {
+  local dir h120 h121 e i u
+  e=$'\303\251'
+  h120=""; for i in $(seq 1 120); do h120="$h120$e"; done
+  h121="$h120$e"
+  u='url: https://example.invalid/a'
+  tk_malformed tracker-c-heading-url "$(printf '%s\nsection: a docs/x.md#%s' "$u" "$h121")" bad-section
+  tk_malformed tracker-c-heading-url "$(printf '%s\nsection: a docs/x.md#H%s' "$u" $'\302\205')" bad-section
+  tk_malformed tracker-c-heading-url "$(printf 'url: https://example.invalid/%s\nsection: a docs/x.md#H' "$e")" bad-url
+  tk_malformed tracker-c-heading-url "$(printf 'url: https://example.invalid/a%sb' $'\343\200\200')" bad-url
+  # The accept path runs last: mk_fixture names its directory after the running case, so every
+  # fixture in this case shares one directory and the malformed runs above must find it clean.
+  dir="$(mk_fixture tracker-c-heading-url)"
+  build_tracker_env "$dir"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nsection: status docs/status.md#%s' "$h120")"
+  tk_blob "$dir" docs/status.md "$(tk_sha 1)" "$(printf '# Status\n\n## %s\n\n| Name | Refs |\n|---|---|\n| a | #2 |\n' "$h120")"
+  run_tracker "$dir"
+  expect_rc 0
+  case "$planning_out" in
+    *result=ready*) : ;;
+    *) __ok=0; __why="${__why}120-character heading: expected result=ready, got $planning_out\n" ;;
+  esac
+  tk_jq "$dir" '.sections[0].title == "'"$h120"'"' true
 }
 
 # tracker-state-parked — the triaged-held label reads parked below approved and above held, so a
@@ -14766,6 +14852,9 @@ cases=(
   "tracker-truncated|case_tracker_truncated|#622: reaching the open-issue or per-milestone closed-issue limit sets truncated"
   "tracker-never-writes|case_tracker_never_writes|#622: only read gh calls, no booby-trapped write command fires, the working tree is byte-identical"
   "tracker-milestone-numeric-title|case_tracker_milestone_numeric_title|#622: gh is given the milestone number, so a numeric milestone title cannot select another milestone"
+  "tracker-locale-section-id|case_tracker_locale_section_id|#669: under a collating UTF-8 locale an uppercase or accented id, path or label is still malformed (the script's own C locale)"
+  "tracker-locale-child-env|case_tracker_locale_child_env|#669: the script's child processes see LC_ALL=C even when the caller exported en_US.UTF-8"
+  "tracker-c-heading-url|case_tracker_c_heading_url|#669: a heading stays 1-120 characters with no C1 control, and a non-ASCII url is bad-url, in the C locale"
   "tracker-deterministic|case_tracker_deterministic|#622: two runs over the same inputs write a byte-identical state.json"
   "tracker-page|case_tracker_page|#622: page mode writes the template with @REPO_NAME@ replaced, for any section state; a bad repo name skips"
   "tracker-template-generic|case_tracker_template_generic|#622: the shipped page has no external resource, localStorage or innerHTML, and keeps its @REPO_NAME@ placeholder"

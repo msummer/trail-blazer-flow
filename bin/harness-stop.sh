@@ -182,7 +182,7 @@
 # could not be read, regardless of whether the local route is also set (see the STDOUT GRAMMAR
 # section above) — not only "when neither route is set". Run from anywhere inside a git checkout.
 set -uo pipefail
-
+export LC_ALL=C
 STOP_LABEL="harness-stop"
 RETRY_SLEEP=30
 

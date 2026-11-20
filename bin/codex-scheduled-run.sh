@@ -455,10 +455,10 @@ prune_runs() {
     [ -d "$d" ] || continue
     name="${d##*/}"
     case "$name" in
-      [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]T[0-9][0-9][0-9][0-9][0-9][0-9]Z-*)
+      [0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]T[0123456789][0123456789][0123456789][0123456789][0123456789][0123456789]Z-*)
         suffix="${name##*-}"
         case "$suffix" in
-          ''|*[!0-9]*) continue ;;
+          ''|*[!0123456789]*) continue ;;
         esac
         runs+=("$name")
         ;;
@@ -640,7 +640,7 @@ read_track_state() {
       issue=*)
         issue="${line#issue=}"
         case "$issue" in
-          ''|*[!0-9]*) issue="" ;;
+          ''|*[!0123456789]*) issue="" ;;
         esac
         ;;
       streak=*)
@@ -723,10 +723,10 @@ track_create() {
   n=""
   while IFS= read -r line; do
     case "$line" in
-      */issues/*[0-9])
+      */issues/*[0123456789])
         n="${line##*/issues/}"
         case "$n" in
-          ''|*[!0-9]*) n="" ;;
+          ''|*[!0123456789]*) n="" ;;
         esac
         ;;
     esac
@@ -891,21 +891,21 @@ case "$timeout" in
   0?*) finish preflight-failed bad-timeout ;;
 esac
 case "$timeout" in
-  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
+  ''|*[!0123456789]*) finish preflight-failed bad-timeout ;;
 esac
 [ "$timeout" -gt 0 ] || finish preflight-failed bad-timeout
 case "$grace" in
   0?*) finish preflight-failed bad-timeout ;;
 esac
 case "$grace" in
-  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
+  ''|*[!0123456789]*) finish preflight-failed bad-timeout ;;
 esac
 [ "$grace" -gt 0 ] || finish preflight-failed bad-timeout
 case "$gh_timeout_raw" in
   0?*) finish preflight-failed bad-timeout ;;
 esac
 case "$gh_timeout_raw" in
-  ''|*[!0-9]*) finish preflight-failed bad-timeout ;;
+  ''|*[!0123456789]*) finish preflight-failed bad-timeout ;;
 esac
 [ "$gh_timeout_raw" -gt 0 ] || finish preflight-failed bad-timeout
 gh_timeout="$gh_timeout_raw"
@@ -964,7 +964,7 @@ case "$lock_state" in
       lock_reason=other-host
     else
       case "$held_pid" in
-        ''|*[!0-9]*) lock_reason=unreadable-holder ;;
+        ''|*[!0123456789]*) lock_reason=unreadable-holder ;;
         *)
           if pid_alive "$held_pid"; then
             lock_reason=live-holder

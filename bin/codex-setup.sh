@@ -32,7 +32,7 @@
 # Re-run this after every plugin upgrade: the rules file's host_executable paths are pinned to
 # THIS install's own bin/ directory, which carries the version.
 set -uo pipefail
-
+export LC_ALL=C
 CODEX_AGENT_ROLES="planner implementer verifier"
 BEGIN_MARKER="<!-- trail-blazer-flow:contract-pointer -->"
 END_MARKER="<!-- /trail-blazer-flow:contract-pointer -->"

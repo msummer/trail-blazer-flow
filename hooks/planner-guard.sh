@@ -67,7 +67,7 @@
 # regardless of any option on the command line — a documented residual, not a code change (see the
 # #407 kickback maintainer approval).
 set -uo pipefail
-
+export LC_ALL=C
 # --- vocabulary --------------------------------------------------------------------------------
 # Grep-extractable single-line KEY="value" declarations (the 2.5/4.36-4.42 idiom).
 AGENT_TYPES_PLANNER="planner trail-blazer-flow:planner"

@@ -3910,6 +3910,10 @@
         {
           "from": "  local LC_ALL=C\n",
           "to": ""
+        },
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
         }
       ],
       "expect_fail": [
@@ -3926,6 +3930,10 @@
         {
           "from": "cdg_bytes() { local LC_ALL=C; cdg_n=\"${#1}\"; }",
           "to": "cdg_bytes() { cdg_n=\"${#1}\"; }"
+        },
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
         }
       ],
       "expect_fail": [
@@ -3943,6 +3951,10 @@
         {
           "from": "  local LC_ALL=C\n  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n",
           "to": "  [ \"${#text}\" -le \"$CDG_TEXT_MAX_BYTES\" ] || deny_too_large\n  local LC_ALL=C\n"
+        },
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
         }
       ],
       "expect_fail": [
@@ -3958,6 +3970,10 @@
         {
           "from": "\n  cdg_bytes \"$cwd\"\n",
           "to": "\n  cdg_n=\"${#cwd}\"\n"
+        },
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
         }
       ],
       "expect_fail": [
@@ -3973,6 +3989,10 @@
         {
           "from": "    cdg_bytes \"$cwd\"\n",
           "to": "    cdg_n=\"${#cwd}\"\n"
+        },
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
         }
       ],
       "expect_fail": [
@@ -4891,6 +4911,10 @@
         {
           "from": "pg_bytes() { local LC_ALL=C; pg_n=\"${#1}\"; }",
           "to": "pg_bytes() { pg_n=\"${#1}\"; }"
+        },
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
         }
       ],
       "expect_fail": [

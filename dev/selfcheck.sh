@@ -245,6 +245,43 @@ else
   bad "1.9 unguarded 'gh issue comment|edit|close' found —$bad_list"
 fi
 
+# 1.10 (#669) — a bin/*.sh or hooks/*.sh script holding a bracket range ([a-z], [!0-9]) or a POSIX
+# class ([[:space:]]) must put a line that is exactly `export LC_ALL=C` ahead of the first such
+# line. Under macOS /bin/bash 3.2 in a collating locale (en_US.UTF-8) a bracket range follows the
+# locale's collation order, so [a-z] admits "A" or an accented letter and a class covers Unicode
+# characters; ubuntu's bash 5 (globasciiranges on) and its C.UTF-8 codepoint collation hide that on
+# every pull request, and the one job that shows it runs only nightly. The two artifacts compared
+# are both read mechanically from the same script: its export line and its range/class lines
+# (script to script, the same lint family as 1.4 and 1.7). A script that must not run under C
+# (bin/codex-scheduled-run.sh launches `codex exec` with its inherited environment) spells its
+# ranges as explicit character lists instead and so has no hit. Hits are non-comment lines (1.4's
+# idiom) matching a bracket whose body, up to the first quote or closing bracket, holds an x-y
+# range, or a [:class:]; every grep runs under LC_ALL=C. Known limits: only the export's FIRST
+# line number is compared, so an indented export inside a function is not detected as the guard,
+# and a function defined above the export but called later is not seen; the range heuristic
+# over-flags `${a[i-1]}` and an unquoted `[ x-y ]` test, and the remedy for an over-flag is the
+# export itself.
+range_pat='\[[!^]?[^]"]*[A-Za-z0-9]-[A-Za-z0-9]|\[:(alnum|alpha|blank|cntrl|digit|graph|lower|print|punct|space|upper|xdigit):\]'
+bad_list=""
+for s in "$root"/bin/*.sh "$root"/hooks/*.sh; do
+  [ -f "$s" ] || continue
+  hits="$(LC_ALL=C grep -vnE '^[[:space:]]*#' "$s" | LC_ALL=C grep -E ":.*($range_pat)")"
+  [ -n "$hits" ] || continue
+  first_hit="${hits%%:*}"
+  exp="$(LC_ALL=C grep -nx 'export LC_ALL=C' "$s")"
+  exp="${exp%%:*}"
+  if [ -z "$exp" ]; then
+    bad_list="$bad_list $s: first range/class at line $first_hit, no 'export LC_ALL=C' line;"
+  elif [ "$first_hit" -lt "$exp" ]; then
+    bad_list="$bad_list $s: first range/class at line $first_hit comes before 'export LC_ALL=C' at line $exp;"
+  fi
+done
+if [ -z "$bad_list" ]; then
+  ok "1.10 every bin/*.sh or hooks/*.sh with a bracket range or POSIX class exports LC_ALL=C before its first one (#669)"
+else
+  bad "1.10 bracket range/class before (or without) a top-level 'export LC_ALL=C' —$bad_list"
+fi
+
 # ============================================================================
 echo
 echo "-- Group 2: JSON manifests --"

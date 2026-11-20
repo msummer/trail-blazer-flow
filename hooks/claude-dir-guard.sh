@@ -126,6 +126,7 @@
 # the harmless calls it denies (with the remedy for each) are listed in docs/reference/safety-model.md,
 # under "Known gaps" and "Known over-blocks".
 set -uo pipefail
+export LC_ALL=C
 # #457: sampled once, at hook start; see "Analysis deadline (#457)" in this file's header.
 cdg_t0=$SECONDS
 
