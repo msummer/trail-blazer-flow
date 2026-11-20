@@ -161,15 +161,15 @@ the update classes the policy names. Never a human's PR.
 for each PR immediately before that PR's judgment checks and merge guards — after any earlier
 merge in this pass, never reusing a run from before it (the base tip moves). It is read-only and
 fails closed; its header is the contract for what it checks, how it retries, and what it prints.
-In order it runs: the per-PR stop check (see *Stop switch* below); the PR's
-`claude/<n>-…` head branch (`<n>` never taken from body prose); the verifier's own `outcome=pass`
-status line in the PR body, matched against the verdict archived for that head branch (a prose
-"verifier verdict: pass" without that line is **not** green); the plan-binding provenance and the
+In order it runs: the per-PR stop check (see *Stop switch* below); the PR's `claude/<n>-…` head
+branch (`<n>` never from body prose, only `[A-Za-z0-9._/-]` after it); the verifier's `outcome=pass`
+line in the PR body, matched against the verdict the PR's own author archived for that head branch
+as a trusted account (a prose "verifier verdict: pass", or anyone else's verdict, is **not** green); the plan-binding provenance and the
 post-approval comments; CI green on the head commit; the up-to-date rail; the governance path list
 and, for a lesson-append, its files and end-of-file checks; and guard (a)'s base assertion. Pass
 `--allow-no-ci` only when a **declared** "Merge autonomy policy" explicitly opts a no-CI repo in —
 never under the implied policy. Pass `--dependabot` only for a Dependabot PR a declared policy
-covers (it skips the harness-only checks and refuses a `claude/` branch). By exit status:
+covers (it skips the harness-only checks, refuses a `claude/` branch and a non-Dependabot author). By exit status:
 
 - **3 (`floor=stop`):** take *Stop switch*'s per-PR stop path, pasting the printed lines verbatim.
 - **1 (`floor=hold`):** **not eligible**. Each `fail=` line, copied verbatim, is the one-line

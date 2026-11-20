@@ -11,7 +11,8 @@
 #                  a declared "Merge autonomy policy" opts a no-CI repo in; this script never reads
 #                  policy prose.
 #   --dependabot   Dependabot mode: skips the harness-only checks (provenance, archive, binding,
-#                  post-approval, lessons carve-out) and refuses a claude/ head branch.
+#                  post-approval, lessons carve-out), refuses a claude/ head branch, and requires
+#                  the PR's author to be Dependabot itself (the author check).
 #
 # EXIT CODES: 0 = floor=pass; 1 = floor=hold; 3 = floor=stop; 2 = usage/environment error (a bad
 # argument, jq/gh/git missing, not inside a git repository) with a stderr reason and no stdout.
@@ -21,7 +22,7 @@
 #   floor=pass|hold|stop
 #   fail=<check> <reason>      one line per failed check, in check order; none on a pass
 #   evidence, in this fixed order, each line only when its value was obtained: pr=, mode=,
-#     head-branch=, issue=, default-branch=, base-ref=, base-tip=, head-oid=, merge-state=,
+#     head-branch=, pr-author=, issue=, default-branch=, base-ref=, base-tip=, head-oid=, merge-state=,
 #     ancestry-rc=, ci=, check| <name,state,bucket as a JSON array>, verifier-line=, archive-url=,
 #     approved-at=, approved-by=, the governance:/changed: lines governance-paths.sh printed,
 #     governance=<none|lessons-only|hold>, lessons-files=, added| <LESSONS.md added line>,
@@ -29,7 +30,7 @@
 # A pass needs no fail= line AND every check its mode requires recorded a pass, so a skipped or
 # forgotten check can never read as a pass. Untrusted text appears only behind a fixed prefix, and
 # is cleaned per line type: fail=, governance:, changed: and the key= evidence lines that carry it
-# (head-branch=, verifier-line=, approved-by=, ...) have every control character, TAB included,
+# (head-branch=, pr-author=, verifier-line=, approved-by=, ...) have every control character, TAB included,
 # replaced by "?"; a check| line is one JSON array, so the controls are JSON-escaped; an added| line
 # has every control character except TAB replaced by "?". The governance-paths.sh verdict line is
 # never echoed, only re-emitted as governance=. Untrusted values reach jq only through --arg, never
@@ -44,12 +45,21 @@
 #   default branch gh repo view --json defaultBranchRef (retried)                  fail=read
 #   fetch          git fetch origin (retried; never fetches pull refs)             fail=fetch
 #   rail           git rev-parse origin/<default> -> base-tip=                     fail=rail
-#   PR read        one gh pr view (retried): head branch/OID, base, body, merge state  fail=read
-#   branch         the head branch is claude/<n>-... (<n> never taken from body prose)  fail=branch
+#   PR read        one gh pr view (retried): head branch/OID, base, body, merge state, author
+#                                                                                   fail=read
+#   branch         the head branch is claude/<n>-<rest>, <rest> only [A-Za-z0-9._/-] with no "..",
+#                  "//" or "/." and no trailing "/", "." or ".lock" (valid_branch, the same rule
+#                  changelog-merge.sh applies), so a head-branch= value is always safe to paste into
+#                  a shell line (<n> never taken from body prose)                   fail=branch
+#   author         Dependabot mode only: the PR author is Dependabot (is_bot, login app/dependabot or
+#                  dependabot[bot]). Harness mode binds the author inside the archive check
+#                                                                                   fail=author
 #   provenance     the PR body carries the verifier's outcome=pass status line for issue <n> and
 #                  not an outcome=fail one                                         fail=provenance
-#   archive        the newest verifier-verdict comment keyed to this head branch exists, its status
-#                  line starts as expected, and the PR body contains it (retried read) fail=archive
+#   archive        the newest verifier-verdict comment keyed to this head branch AND posted by this
+#                  PR's own author with a trusted authorAssociation (TRUSTED_ASSOCIATIONS) exists,
+#                  its status line starts as expected, and the PR body contains it (retried read).
+#                  A verdict comment from anyone else is ignored, never matched    fail=archive
 #   binding        find-implementation-work.sh --issue <n> (retried): covers_plan is true and the PR
 #                  body contains a binding line of an approved_at_history entry, newest first
 #                                                                                   fail=binding
@@ -75,6 +85,12 @@
 # covers_plan false, no archive, an archive mismatch) is read once and never retried. Not retried:
 # harness-stop.sh, git rev-parse, git merge-base, governance-paths.sh, and the two lessons reads.
 #
+# TRUST (v3.7.1): a verdict comment counts only when its author is the PR's own author and its
+# authorAssociation is OWNER, MEMBER or COLLABORATOR. The implementer opens the PR and archives the
+# verdict from one gh identity in one run, so both always match on the standard flow; an outside
+# commenter's comment (CONTRIBUTOR, NONE, ...) or a trusted user's verdict on someone else's PR
+# releases nothing. The PR author is therefore a trusted account whenever archive passes.
+#
 # READ-ONLY: the only gh calls are pr view, pr checks, issue view and repo view; the only git calls
 # are rev-parse, fetch origin (the remote-tracking update the floor always made), merge-base
 # --is-ancestor and diff. It writes no file and never merges or edits a label or comment: the merge
@@ -95,15 +111,23 @@
 #     line, so even a genuine append holds.
 #   - A fork PR reusing a harness branch name is held only because git fetch origin does not fetch
 #     fork commits, so the ancestry check errors. Keep the fetch plain.
+#   - A PR opened by one account and verified (verdict archived) by another holds on archive, by
+#     design: re-run the verifier from the PR author's account, or merge by hand.
+#   - Dependabot is recognised by the login gh prints for it (app/dependabot, or the REST spelling
+#     dependabot[bot]) with is_bot true. If gh changes that spelling, every Dependabot PR holds on
+#     fail=author: fail closed, and loud.
 set -uo pipefail
 export LC_ALL=C
 
 RETRY_SLEEP=30
 NO_CHECKS_STEM='no checks reported on the'
+# The comment authorAssociation values the archive check trusts — the same set as the two discovery
+# scripts and cleanup-after-merge.sh (gate assertion 4.26 pins all four together).
+TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"
 # The jq programs below are single-quoted one-liners so dev/selfcheck.sh can extract and run them
-# offline (assertions 5.5-5.9, 5.15). Untrusted values arrive as --arg n/outcome/branch/needle.
+# offline (assertions 5.5-5.9, 5.15). Untrusted values arrive as --arg n/outcome/branch/author/needle.
 PROVENANCE_JQ='(.body // "") | contains("<!-- harness-status: stage=verifier issue=" + $n + " outcome=" + $outcome + " ")'
-ARCHIVE_JQ='[.comments[] | select((.body | contains("<!-- verifier-verdict -->")) and (.body | contains("<!-- verifier-verdict-branch: " + $branch + " -->")))] | sort_by(.createdAt) | last | ((.url // "none"), ((.body // "") | split("\n") | map(select(startswith("<!-- harness-status:"))) | last // "none"))'
+ARCHIVE_JQ='[.comments[] | select((.body | contains("<!-- verifier-verdict -->")) and (.body | contains("<!-- verifier-verdict-branch: " + $branch + " -->")) and ($author != "") and ((.author.login // "") == $author) and (((.authorAssociation // "") | ascii_upcase) as $a | ($trusted | split(" ") | index($a)) != null))] | sort_by(.createdAt) | last | ((.url // "none"), ((.body // "") | split("\n") | map(select(startswith("<!-- harness-status:"))) | last // "none"))'
 BODY_CONTAINS_JQ='(.body // "") | contains($needle)'
 LESSONS_FILES_JQ='[.files[] | select(.path | ascii_downcase | startswith(".claude/"))] as $c | if (.files | length) != .changedFiles then "incomplete" elif ([.files[] | select(.changeType == "RENAMED")] | length) > 0 then "renamed" elif ($c | length) != 1 or $c[0].path != ".claude/LESSONS.md" then "not-lessons-only" elif (["ADDED","MODIFIED"] | index($c[0].changeType)) == null or $c[0].deletions != 0 or $c[0].additions < 1 then "not-add-only" elif $c[0].additions > 40 then "too-large" else "lessons-append" end'
 CI_JQ='if type != "array" or length == 0 or any(.[]; type != "object") then "invalid" else (map(.bucket)) as $b | if any($b[]; . == "fail" or . == "cancel") then "failing" elif any($b[]; . == "pending") then "pending" elif all($b[]; . == "pass" or . == "skipping") then (if any($b[]; . == "pass") then "green" else "skipped" end) else "failing" end end'
@@ -170,6 +194,30 @@ is_hex() {
   return 1
 }
 
+# valid_branch S — `claude/<digits>-<rest>`, <rest> only [A-Za-z0-9._/-], no `..`, `//` or `/.`, and
+# not ending in `/`, `.` or `.lock`. A copy of bin/changelog-merge.sh's own valid_branch: the floor
+# applies it so a branch that rule refuses never reaches a pass, and never reaches the changelog
+# route's shell lines either (skills/issue-cycle/references/serial-train.md).
+valid_branch() {
+  local b digits after rest
+  case "$1" in
+    claude/*) b="${1#claude/}" ;;
+    *) return 1 ;;
+  esac
+  digits="${b%%[!0-9]*}"
+  [ -n "$digits" ] || return 1
+  after="${b#"$digits"}"
+  case "$after" in
+    -?*) rest="${after#-}" ;;
+    *) return 1 ;;
+  esac
+  case "$rest" in
+    *[!A-Za-z0-9._/-]*) return 1 ;;
+    *..*|*//*|*/.*|*.lock/*|*/|*.|*.lock) return 1 ;;
+  esac
+  return 0
+}
+
 # retry_read ATTEMPT_FN — the attempt (the call plus its shape validation) returns 0 on success and
 # sets its result variables only then; on failure it sets ATTEMPT_ERR to a fixed phrase. One retry
 # after RETRY_SLEEP seconds.
@@ -199,13 +247,17 @@ attempt_fetch() {
 }
 
 attempt_pr() {
-  local out oid
-  if ! out="$(gh pr view "$pr" --json headRefName,baseRefName,body,headRefOid,mergeStateStatus)"; then
+  local out oid login
+  if ! out="$(gh pr view "$pr" --json headRefName,baseRefName,body,headRefOid,mergeStateStatus,author)"; then
     ATTEMPT_ERR="gh pr view failed"; return 1
   fi
-  if ! printf '%s' "$out" | jq -e 'type == "object" and (.headRefName | type) == "string" and (.baseRefName | type) == "string" and (.mergeStateStatus | type) == "string" and ((.body | type) == "string" or .body == null) and (.headRefOid | type) == "string"' >/dev/null 2>&1; then
+  if ! printf '%s' "$out" | jq -e 'type == "object" and (.headRefName | type) == "string" and (.baseRefName | type) == "string" and (.mergeStateStatus | type) == "string" and ((.body | type) == "string" or .body == null) and (.headRefOid | type) == "string" and (.author | type) == "object" and (.author.login | type) == "string"' >/dev/null 2>&1; then
     ATTEMPT_ERR="unexpected response shape"; return 1
   fi
+  login="$(printf '%s' "$out" | jq -r '.author.login' 2>/dev/null | tr -d '\r')"
+  case "$login" in
+    ''|*[[:space:]]*|*[[:cntrl:]]*) ATTEMPT_ERR="no usable PR author login"; return 1 ;;
+  esac
   oid="$(printf '%s' "$out" | jq -r '.headRefOid' 2>/dev/null | tr -d '\r')"
   is_hex "$oid" || { ATTEMPT_ERR="headRefOid is not a 40- or 64-character hex id"; return 1; }
   pr_json="$out"
@@ -213,6 +265,8 @@ attempt_pr() {
   head_branch="$(printf '%s' "$out" | jq -r '.headRefName' | tr -d '\r')"
   base_ref="$(printf '%s' "$out" | jq -r '.baseRefName' | tr -d '\r')"
   merge_state="$(printf '%s' "$out" | jq -r '.mergeStateStatus' | tr -d '\r')"
+  pr_author="$login"
+  pr_author_bot="$(printf '%s' "$out" | jq -r 'if .author.is_bot == true then "true" else "false" end' 2>/dev/null | tr -d '\r')"
   return 0
 }
 
@@ -222,7 +276,7 @@ attempt_archive() {
   if ! printf '%s' "$out" | jq -e 'type == "object" and (.comments | type) == "array"' >/dev/null 2>&1; then
     ATTEMPT_ERR="unexpected response shape"; return 1
   fi
-  if ! res="$(printf '%s' "$out" | jq -r --arg branch "$head_branch" "$ARCHIVE_JQ" 2>/dev/null)"; then
+  if ! res="$(printf '%s' "$out" | jq -r --arg branch "$head_branch" --arg author "$pr_author" --arg trusted "$TRUSTED_ASSOCIATIONS" "$ARCHIVE_JQ" 2>/dev/null)"; then
     ATTEMPT_ERR="the archive program failed"; return 1
   fi
   res="$(printf '%s' "$res" | tr -d '\r')"
@@ -386,6 +440,8 @@ head_oid=""
 head_branch=""
 base_ref=""
 merge_state=""
+pr_author=""
+pr_author_bot=""
 pr_ok=false
 if retry_read attempt_pr; then
   pr_ok=true
@@ -403,17 +459,16 @@ if $pr_ok; then
       claude/*) add_fail branch "--dependabot given for the claude/ head branch $(c "$head_branch") — not a Dependabot PR" ;;
       *) add_pass branch ;;
     esac
-  else
-    rest="${head_branch#claude/}"
-    n="${rest%%-*}"
-    case "$head_branch" in
-      claude/*-*)
-        case "$n" in
-          ''|*[!0-9]*) n="" ;;
-        esac
-        ;;
-      *) n="" ;;
+    case "$pr_author_bot $pr_author" in
+      "true app/dependabot"|"true dependabot[bot]") add_pass author ;;
+      *) add_fail author "PR author $(c "$pr_author") is not Dependabot — --dependabot releases Dependabot's own PRs only" ;;
     esac
+  else
+    n=""
+    if valid_branch "$head_branch"; then
+      rest="${head_branch#claude/}"
+      n="${rest%%-*}"
+    fi
     if [ -n "$n" ]; then
       issue_n="$n"
       harness_ok=true
@@ -454,7 +509,7 @@ if $harness_ok; then
       *)
         archive_url=""
         archive_line=""
-        add_fail archive "no archived verifier verdict for head branch $(c "$head_branch")"
+        add_fail archive "no archived verifier verdict for head branch $(c "$head_branch") posted by the PR's author $(c "$pr_author") as OWNER, MEMBER or COLLABORATOR"
         ;;
     esac
   else
@@ -642,7 +697,7 @@ fi
 # ---- verdict and output --------------------------------------------------------------------------
 
 if $dependabot; then
-  required="stop branch ci fetch rail ancestry merge-state governance base"
+  required="stop branch author ci fetch rail ancestry merge-state governance base"
   mode="dependabot"
 else
   required="stop branch provenance archive binding post-approval ci fetch rail ancestry merge-state governance base"
@@ -660,6 +715,7 @@ ev() { [ -z "$2" ] || out="${out}$1=$2"$'\n'; }
 ev pr "$pr"
 ev mode "$mode"
 ev head-branch "$(c "$head_branch")"
+ev pr-author "$(c "$pr_author")"
 ev issue "$issue_n"
 ev default-branch "$(c "$default_branch")"
 ev base-ref "$(c "$base_ref")"

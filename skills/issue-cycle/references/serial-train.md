@@ -140,16 +140,21 @@ holds the PR as step 1 says).
 It is still this PR's one update this pass. It settles one conflict only: the repo's declared
 append-only changelog section (`docs/reference/claude-md-contract.md`, item 12).
 
-1. Run `changelog-merge.sh <base-tip> <head-oid> <head-branch>`, the three values pasted literally
-   from that floor run's `base-tip=`, `head-oid=` and `head-branch=` lines. It writes git objects
-   only and moves no ref.
+1. Run `changelog-merge.sh '<base-tip>' '<head-oid>' '<head-branch>'`, the three values pasted
+   from that floor run's `base-tip=`, `head-oid=` and `head-branch=` lines, each inside its own
+   pair of single quotes. It writes git objects only and moves no ref. Before pasting, check the
+   `head-branch=` value: it must be `claude/`, digits, `-`, then only letters, digits, `.`, `_`,
+   `/` and `-`. The floor holds any other branch on `fail=branch`, so this never fires on a PR
+   that reached this route; if it does anyway, run nothing and hold the PR with "unsafe head
+   branch". A branch name is never pasted into a shell line outside single quotes.
 2. Only exit 0 with `verdict=updated` as the last line continues. `verdict=absent` holds the PR with
    "conflict; no Append-only changelog declared". Any other result — `verdict=hold` (quote its
    `reason=` line and every `overlap:` line), `verdict=error`, a non-zero exit, a crash — holds the
    PR, quoting stderr when there is any.
-3. Push the printed commit with one plain `git push origin <new-head>:refs/heads/<head-branch>`,
-   `<new-head>` from the script's `new-head=` line and `<head-branch>` from the floor run, both
-   pasted literally. Never forced, never retried; a non-zero exit or a denial holds the PR.
+3. Push the printed commit with one plain `git push origin '<new-head>:refs/heads/<head-branch>'`,
+   `<new-head>` from the script's `new-head=` line (40 or 64 lowercase hex characters, or hold) and
+   `<head-branch>` from the floor run (the value step 1 checked), the whole refspec inside one pair
+   of single quotes. Never forced, never retried; a non-zero exit or a denial holds the PR.
 4. Steps 2–5 above then run as written, with step 2 also requiring the head it reads to equal
    `new-head=`; any other value holds the PR.
 

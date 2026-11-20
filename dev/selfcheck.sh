@@ -1132,21 +1132,26 @@ fi
 planning_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/find-planning-work.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
 impl_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/find-implementation-work.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
 cleanup_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/cleanup-after-merge.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
-if [ -z "$planning_trusted" ] || [ -z "$impl_trusted" ] || [ -z "$cleanup_trusted" ]; then
-  bad "4.26 TRUSTED_ASSOCIATIONS extraction failed — bin/find-planning-work.sh's, bin/find-implementation-work.sh's, or bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= line didn't match (structure changed)"
+floor_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$root/bin/merge-floor.sh" | tr ' ' '\n' | grep -v '^$' | sort -u)"
+if [ -z "$planning_trusted" ] || [ -z "$impl_trusted" ] || [ -z "$cleanup_trusted" ] || [ -z "$floor_trusted" ]; then
+  bad "4.26 TRUSTED_ASSOCIATIONS extraction failed — bin/find-planning-work.sh's, bin/find-implementation-work.sh's, bin/cleanup-after-merge.sh's, or bin/merge-floor.sh's TRUSTED_ASSOCIATIONS= line didn't match (structure changed)"
 else
   planning_not_impl="$(comm -23 <(_lines "$planning_trusted") <(_lines "$impl_trusted"))"
   impl_not_planning="$(comm -13 <(_lines "$planning_trusted") <(_lines "$impl_trusted"))"
   cleanup_not_planning="$(comm -23 <(_lines "$cleanup_trusted") <(_lines "$planning_trusted"))"
   planning_not_cleanup="$(comm -13 <(_lines "$cleanup_trusted") <(_lines "$planning_trusted"))"
-  if [ -z "$planning_not_impl" ] && [ -z "$impl_not_planning" ] && [ -z "$cleanup_not_planning" ] && [ -z "$planning_not_cleanup" ]; then
-    ok "4.26 bin/find-planning-work.sh, bin/find-implementation-work.sh, and bin/cleanup-after-merge.sh agree on TRUSTED_ASSOCIATIONS"
+  floor_not_planning="$(comm -23 <(_lines "$floor_trusted") <(_lines "$planning_trusted"))"
+  planning_not_floor="$(comm -13 <(_lines "$floor_trusted") <(_lines "$planning_trusted"))"
+  if [ -z "$planning_not_impl" ] && [ -z "$impl_not_planning" ] && [ -z "$cleanup_not_planning" ] && [ -z "$planning_not_cleanup" ] && [ -z "$floor_not_planning" ] && [ -z "$planning_not_floor" ]; then
+    ok "4.26 bin/find-planning-work.sh, bin/find-implementation-work.sh, bin/cleanup-after-merge.sh, and bin/merge-floor.sh agree on TRUSTED_ASSOCIATIONS"
   else
     msg="4.26 TRUSTED_ASSOCIATIONS drift:"
     [ -n "$planning_not_impl" ] && msg="$msg association(s) in find-planning-work.sh but not find-implementation-work.sh: $(printf '%s' "$planning_not_impl" | tr '\n' ' ');"
     [ -n "$impl_not_planning" ] && msg="$msg association(s) in find-implementation-work.sh but not find-planning-work.sh: $(printf '%s' "$impl_not_planning" | tr '\n' ' ');"
     [ -n "$cleanup_not_planning" ] && msg="$msg association(s) in cleanup-after-merge.sh but not find-planning-work.sh: $(printf '%s' "$cleanup_not_planning" | tr '\n' ' ');"
     [ -n "$planning_not_cleanup" ] && msg="$msg association(s) in find-planning-work.sh but not cleanup-after-merge.sh: $(printf '%s' "$planning_not_cleanup" | tr '\n' ' ');"
+    [ -n "$floor_not_planning" ] && msg="$msg association(s) in merge-floor.sh but not find-planning-work.sh: $(printf '%s' "$floor_not_planning" | tr '\n' ' ');"
+    [ -n "$planning_not_floor" ] && msg="$msg association(s) in find-planning-work.sh but not merge-floor.sh: $(printf '%s' "$planning_not_floor" | tr '\n' ' ');"
     bad "$msg"
   fi
 fi
@@ -2098,8 +2103,13 @@ mf_const() { sed -nE "s/^$1='(.*)'\$/\1/p" "$mf"; }
 mf_str() { jq -n -c --arg v "$1" '$v'; }
 av_n="$(grep -c -- '^ARCHIVE_JQ=' "$mf")"
 av_prog="$(mf_const ARCHIVE_JQ)"
-# av_for BRANCH — the extracted program with $branch bound to BRANCH.
-av_for() { printf '%s as $branch | %s' "$(mf_str "$1")" "$av_prog"; }
+# av_for BRANCH [AUTHOR] — the extracted program with $branch bound to BRANCH, $author to AUTHOR
+# (default maint, the PR author every fixture comment below is given by av_trust) and $trusted to
+# the script's own TRUSTED_ASSOCIATIONS value.
+av_trusted="$(sed -nE 's/^TRUSTED_ASSOCIATIONS="([^"]*)"$/\1/p' "$mf")"
+av_for() { printf '%s as $branch | %s as $author | %s as $trusted | %s' "$(mf_str "$1")" "$(mf_str "${2:-maint}")" "$(mf_str "$av_trusted")" "$av_prog"; }
+# av_trust — stdin's comments, each given author maint and authorAssociation OWNER.
+av_trust() { jq -c '.comments |= map(. + {author: {login: "maint"}, authorAssociation: "OWNER"})'; }
 
 extraction_ok=1
 if [ "$av_n" != "1" ]; then
@@ -2131,20 +2141,33 @@ if [ "$extraction_ok" = "1" ]; then
   fx_av_two='{"comments":[{"url":"https://example/c4","createdAt":"2026-08-05T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->"},{"url":"https://example/c3","createdAt":"2026-08-03T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"}]}'
 
   fail_55=""
-  out="$(printf '%s' "$fx_av_none" | jq -r "$(av_for claude/17-a)" 2>&1)"
+  out="$(printf '%s' "$fx_av_none" | av_trust | jq -r "$(av_for claude/17-a)" 2>&1)"
   expected="$(printf 'none\nnone')"
   [ "$out" = "$expected" ] || fail_55="$fail_55 none-fixture: got '$out';"
 
-  out="$(printf '%s' "$fx_av_one" | jq -r "$(av_for claude/17-a)" 2>&1)"
+  out="$(printf '%s' "$fx_av_one" | av_trust | jq -r "$(av_for claude/17-a)" 2>&1)"
   expected="$(printf 'https://example/c2\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
   [ "$out" = "$expected" ] || fail_55="$fail_55 one-fixture: got '$out';"
 
-  out="$(printf '%s' "$fx_av_two" | jq -r "$(av_for claude/17-a)" 2>&1)"
+  out="$(printf '%s' "$fx_av_two" | av_trust | jq -r "$(av_for claude/17-a)" 2>&1)"
   expected="$(printf 'https://example/c4\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->')"
   [ "$out" = "$expected" ] || fail_55="$fail_55 two-fixture (newest-wins, out of array order): got '$out';"
 
+  # Trust (v3.7.1): a verdict from an untrusted association, from no association at all, or from a
+  # trusted account other than the PR author never matches; and a newer such comment does not
+  # shadow the PR author's own older verdict.
+  out="$(printf '%s' "$fx_av_one" | jq -c '.comments |= map(. + {author: {login: "maint"}, authorAssociation: "CONTRIBUTOR"})' | jq -r "$(av_for claude/17-a)" 2>&1)"
+  [ "$out" = "$(printf 'none\nnone')" ] || fail_55="$fail_55 untrusted-association: got '$out';"
+  out="$(printf '%s' "$fx_av_one" | jq -c '.comments |= map(. + {author: {login: "maint"}})' | jq -r "$(av_for claude/17-a)" 2>&1)"
+  [ "$out" = "$(printf 'none\nnone')" ] || fail_55="$fail_55 no-association: got '$out';"
+  out="$(printf '%s' "$fx_av_one" | av_trust | jq -r "$(av_for claude/17-a other)" 2>&1)"
+  [ "$out" = "$(printf 'none\nnone')" ] || fail_55="$fail_55 other-author: got '$out';"
+  out="$(printf '%s' "$fx_av_two" | av_trust | jq -c '.comments[0] |= (. + {author: {login: "outsider"}, authorAssociation: "NONE"})' | jq -r "$(av_for claude/17-a)" 2>&1)"
+  expected="$(printf 'https://example/c3\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
+  [ "$out" = "$expected" ] || fail_55="$fail_55 newer-untrusted-does-not-shadow: got '$out';"
+
   if [ -z "$fail_55" ]; then
-    ok "5.5 archived-verdict --jq program: none/one/two(newest-wins) fixtures all match"
+    ok "5.5 archived-verdict --jq program: none/one/two(newest-wins) and author-trust fixtures all match"
   else
     bad "5.5 archived-verdict --jq program:$fail_55"
   fi
@@ -2154,15 +2177,15 @@ if [ "$extraction_ok" = "1" ]; then
   fx_av_multi='{"comments":[{"url":"https://example/pa","createdAt":"2026-08-01T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-slice-a -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"},{"url":"https://example/pab","createdAt":"2026-08-02T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-slice-ab -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=1 -->"},{"url":"https://example/pb","createdAt":"2026-08-03T00:00:00Z","body":"<!-- verifier-verdict -->\n<!-- verifier-verdict-branch: claude/17-slice-b -->\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=2 -->"}]}'
 
   fail_56=""
-  out="$(printf '%s' "$fx_av_multi" | jq -r "$(av_for claude/17-slice-a)" 2>&1)"
+  out="$(printf '%s' "$fx_av_multi" | av_trust | jq -r "$(av_for claude/17-slice-a)" 2>&1)"
   expected="$(printf 'https://example/pa\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
   [ "$out" = "$expected" ] || fail_56="$fail_56 slice-a (prefix-collision guard): got '$out';"
 
-  out="$(printf '%s' "$fx_av_multi" | jq -r "$(av_for claude/17-slice-b)" 2>&1)"
+  out="$(printf '%s' "$fx_av_multi" | av_trust | jq -r "$(av_for claude/17-slice-b)" 2>&1)"
   expected="$(printf 'https://example/pb\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=2 -->')"
   [ "$out" = "$expected" ] || fail_56="$fail_56 slice-b: got '$out';"
 
-  out="$(printf '%s' "$fx_av_multi" | jq -r "$(av_for claude/17-slice-zz)" 2>&1)"
+  out="$(printf '%s' "$fx_av_multi" | av_trust | jq -r "$(av_for claude/17-slice-zz)" 2>&1)"
   expected="$(printf 'none\nnone')"
   [ "$out" = "$expected" ] || fail_56="$fail_56 slice-zz (absent branch): got '$out';"
 
@@ -2184,7 +2207,7 @@ if [ "$extraction_ok" = "1" ]; then
   else
     key_line="$(printf '%s' "$key_tpl" | sed 's|claude/<number>-<slug>|claude/17-a|')"
     fx_av_writer='{"comments":[{"url":"https://example/w1","createdAt":"2026-08-04T00:00:00Z","body":"<!-- verifier-verdict -->\n'"$key_line"'\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->"}]}'
-    out="$(printf '%s' "$fx_av_writer" | jq -r "$(av_for claude/17-a)" 2>&1)"
+    out="$(printf '%s' "$fx_av_writer" | av_trust | jq -r "$(av_for claude/17-a)" 2>&1)"
     expected="$(printf 'https://example/w1\n<!-- harness-status: stage=verifier issue=17 outcome=pass retries=0 -->')"
     if [ "$out" = "$expected" ]; then
       ok "5.7 writer/checker round-trip: the writer's mandated key-line template resolves through the checker's --jq program"
