@@ -849,6 +849,27 @@ misreporting orchestrator can still fabricate them; the gain is that doing so no
 consistent, durably visible artifacts instead of one, raising the cost of asserting a verification
 event that didn't happen rather than eliminating the possibility.
 
+**Verdict author** (v3.7.1, from an external review). The archive comment counts only when it was
+posted by the pull request's own author and its `authorAssociation` is `OWNER`, `MEMBER` or
+`COLLABORATOR` (`bin/merge-floor.sh`'s `TRUSTED_ASSOCIATIONS`, the same set the discovery scripts
+and `cleanup-after-merge.sh` trust). Before this, the floor matched the comment on its markers
+alone, so anyone able to comment on the issue could post a matching verdict, and the PR's author
+was never read. On the standard flow the implementer opens the PR and archives the verdict from one
+`gh` identity in one run, so the two always agree; a comment from anyone else is ignored rather
+than matched, and a newer one cannot shadow the real verdict. A PR opened by one account and
+verified from another therefore holds on `fail=archive`. In `--dependabot` mode the floor requires
+the PR's author to be Dependabot itself (`fail=author`).
+
+**Branch names in shell lines** (v3.7.1). A head branch reaches a shell line in one place: the
+serial train's changelog route (`skills/issue-cycle/references/serial-train.md`), which runs
+`changelog-merge.sh` and `git push` with the floor's `head-branch=` value. Git allows `$`, `(`,
+`;`, `|`, backticks and quotes in a ref name, so `claude/12-$(…)` was a valid branch that the
+floor's old `claude/<digits>-` check accepted. The floor now applies `changelog-merge.sh`'s own
+`valid_branch` rule (`claude/<digits>-` then only `[A-Za-z0-9._/-]`, no `..`, `//`, `/.`, and no
+trailing `/`, `.` or `.lock`) and holds anything else on `fail=branch`, and the route pastes each
+value inside single quotes and re-checks the branch before pasting. The implementer's own slugs
+are lowercase alphanumerics and hyphens, so no standard-flow branch is affected.
+
 **Approval provenance** (#174, content binding added by #192, current-label-state pre-filter added
 by #229). The `plan-approved` label attaches
 to the *issue*, not to a specific plan comment, so a naive read of the label alone can't tell a

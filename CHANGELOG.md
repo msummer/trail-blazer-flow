@@ -16,6 +16,15 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- OCA review: the merge floor matches a verifier-verdict comment only when the PR's own author
+  posted it as OWNER, MEMBER or COLLABORATOR, and `--dependabot` requires a Dependabot-authored PR
+  (`fail=author`). A PR opened from one account and verified from another now holds on archive.
+- OCA review: the merge floor refuses a head branch with any character outside `[A-Za-z0-9._/-]`
+  (`changelog-merge.sh`'s own rule), and the serial train's changelog route single-quotes every
+  value it pastes into `changelog-merge.sh` and `git push`. No new grant.
+
 ## v3.7.0
 
 This minor release makes merging safer where some suites run only after a merge, and grows the

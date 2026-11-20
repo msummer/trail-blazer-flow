@@ -731,6 +731,8 @@ p_4_26_drift()      { edit "$1/bin/find-implementation-work.sh" 's/^TRUSTED_ASSO
 p_4_26_extraction() { edit "$1/bin/find-planning-work.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
 p_4_26_drift_cleanup()      { edit "$1/bin/cleanup-after-merge.sh" 's/^TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"$/TRUSTED_ASSOCIATIONS="OWNER MEMBER"/'; }
 p_4_26_extraction_cleanup() { edit "$1/bin/cleanup-after-merge.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
+p_4_26_drift_floor()      { edit "$1/bin/merge-floor.sh" 's/^TRUSTED_ASSOCIATIONS="OWNER MEMBER COLLABORATOR"$/TRUSTED_ASSOCIATIONS="OWNER MEMBER"/'; }
+p_4_26_extraction_floor() { edit "$1/bin/merge-floor.sh" 's/TRUSTED_ASSOCIATIONS/TRUSTED_ASSOCIATION_LIST/g'; }
 p_4_35_drift()      { edit "$1/bin/cleanup-after-merge.sh" 's/^MULTI_PR_LABEL="multi-pr"$/MULTI_PR_LABEL="mlti-pr"/'; }
 p_4_35_extraction() { edit "$1/bin/cleanup-after-merge.sh" 's/MULTI_PR_LABEL/MULTI_PR_LABEL_NAME/g'; }
 p_4_27()            { edit "$1/bin/cleanup-after-merge.sh" 's/harness-audit/harness-audited/g'; }
@@ -850,6 +852,8 @@ p_5_1()               { edit "$1/bin/reconcile-ledger.sh" 's/blocked incomplete 
 p_5_2()               { edit "$1/bin/reconcile-ledger.sh" 's/stage-skipped issue/stage_skipped issue/'; }
 p_5_5()               { edit "$1/bin/merge-floor.sh" '/^ARCHIVE_JQ=/s/sort_by(.createdAt) | //'; }
 p_5_6()               { edit "$1/bin/merge-floor.sh" '/^ARCHIVE_JQ=/s/ + " -->"//'; }
+p_5_5_trust()         { edit "$1/bin/merge-floor.sh" '/^ARCHIVE_JQ=/s/ and (((.authorAssociation \/\/ "") | ascii_upcase) as $a | ($trusted | split(" ") | index($a)) != null)//'; }
+p_5_5_author()        { edit "$1/bin/merge-floor.sh" '/^ARCHIVE_JQ=/s/ and ((.author.login \/\/ "") == $author)//'; }
 p_5_7()               { edit "$1/skills/issue-implementer/SKILL.md" 's/verifier-verdict-branch: claude/verifier-verdict-branch:claude/'; }
 p_5_8()               { edit "$1/bin/merge-floor.sh" '/^PROVENANCE_JQ=/s/ + " ")/)/'; }
 p_5_9()               { edit "$1/bin/merge-floor.sh" '/^BODY_CONTAINS_JQ=/s/(\.body \/\/ "")/(.bodyText \/\/ "")/'; }
@@ -967,6 +971,8 @@ cases=(
   "4.26-extraction|4.26|p_4_26_extraction|rename bin/find-planning-work.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
   "4.26-drift-cleanup|4.26|p_4_26_drift_cleanup|drop COLLABORATOR from bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= value only"
   "4.26-extraction-cleanup|4.26|p_4_26_extraction_cleanup|rename bin/cleanup-after-merge.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty"
+  "4.26-drift-floor|4.26|p_4_26_drift_floor|drop COLLABORATOR from bin/merge-floor.sh's TRUSTED_ASSOCIATIONS= value only (5.5's fixtures use OWNER, so 5.5 stays green)"
+  "4.26-extraction-floor|4.26 5.5 5.6 5.7|p_4_26_extraction_floor|rename bin/merge-floor.sh's TRUSTED_ASSOCIATIONS= line so the gate's extraction comes back empty (5.5/5.6/5.7 bind \$trusted from the same line, so every archive fixture then resolves to none and they fail alongside it)"
   "4.27|4.27|p_4_27|rename the harness-audit marker in bin/cleanup-after-merge.sh only, so the writers and consumers disagree"
   "4.29-drift|4.29|p_4_29_drift|rename has_harness_marker to has_harness_flag in bin/find-implementation-work.sh only"
   "4.29-extraction|4.29|p_4_29_extraction|rename both has_*marker field declarations in bin/find-planning-work.sh so the gate's extraction comes back empty"
@@ -999,6 +1005,8 @@ cases=(
   "5.3|5.3 5.13|p_5_3|break the deploy-bearing sed's capture so a verbatim deploy status line dies again -- measured (post-#233): this same pass also serves 5.13's 'legacy merge line with deploy= only' sub-check, so it fails alongside 5.3 now"
   "5.4|5.4|p_5_4|reword the deploy-specific unknown-outcome explanation 5.4 compares literally"
   "5.5|5.5|p_5_5|drop the sort_by(.createdAt) clause from ARCHIVE_JQ so array order, not recency, picks the winner"
+  "5.5-trust|5.5|p_5_5_trust|drop the authorAssociation clause from ARCHIVE_JQ so a CONTRIBUTOR's or an unassociated verdict comment matches"
+  "5.5-author|5.5|p_5_5_author|drop the author-equals-PR-author clause from ARCHIVE_JQ so a trusted account's verdict on someone else's PR matches"
   "5.6|5.6|p_5_6|drop the archived-verdict key needle's trailing ' -->' so a shorter branch name substring-matches a longer sibling branch's key line"
   "5.7|5.7|p_5_7|remove the space after the colon in the writer's verifier-verdict-branch key-line template so it no longer matches the checker's needle"
   "5.8|5.8|p_5_8|delete the trailing space after outcome=pass in the verdict-provenance needle so a longer outcome token (outcome=passed) substring-matches"
