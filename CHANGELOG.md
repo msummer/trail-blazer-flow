@@ -16,7 +16,11 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.7.1
+
+This patch release closes the two security findings from Open Capital's review of v3.7.0.
+The merge floor now trusts a verifier verdict only from the PR's own author as a trusted account,
+and it holds head branches whose names could reach a shell line unsafely. No new grant.
 
 - OCA review: the merge floor matches a verifier-verdict comment only when the PR's own author
   posted it as OWNER, MEMBER or COLLABORATOR, and `--dependabot` requires a Dependabot-authored PR
