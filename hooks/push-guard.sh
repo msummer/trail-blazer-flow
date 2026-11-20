@@ -169,6 +169,7 @@
 # deadline is sized against Claude Code's documented 10s PreToolUse timeout only (hooks/hooks.json,
 # "timeout": 10).
 set -uo pipefail
+export LC_ALL=C
 set -f  # noglob: untrusted refspec tokens are word-split unquoted below (e.g. in evaluate_segment
         # and the token-array builders); a token shaped like "*:main" must never glob-expand
         # against files in $PWD or a resolved repo directory.
@@ -213,9 +214,9 @@ CFG_INCLUDE_MAX_LINES=2048
 # CFG_INCLUDE_MAX_LINE_CHARS: an included line (depth >= 1) longer than this skips comment-strip and trim
 # entirely (it still spends the line and character budgets) and parsing continues at the next line. Checked
 # with ${#cfgline}, O(n) but cheap relative to cfg_trim(), whose cost on a long whitespace run is not linear.
-# The length counts characters, not bytes.
+# The length counts bytes: this hook runs in the C locale (top-level LC_ALL=C), and the _CHARS names predate that.
 CFG_INCLUDE_MAX_LINE_CHARS=512
-# CFG_INCLUDE_MAX_CHARS: the most CHARACTERS charged across every included line combined (depth >= 1), per
+# CFG_INCLUDE_MAX_CHARS: the most BYTES charged across every included line combined (depth >= 1), per
 # resolve_repo() call. Charged once per line, ${#cfgline}+1, BEFORE the line cap above, so a skipped long line
 # counts fully. It bounds a different shape than CFG_INCLUDE_MAX_LINES: many lines just under the line cap.
 CFG_INCLUDE_MAX_CHARS=65536
@@ -913,8 +914,9 @@ cfg_parse_file() {
   while IFS= read -r cfgline || [ -n "$cfgline" ]; do
     check_deadline
     # Three depth->=1-only budgets, checked here, in this order, before comment-strip or trim ever
-    # runs -- CFG_INCLUDE_MAX_LINES and CFG_INCLUDE_MAX_CHARS bound the total lines read and characters charged
-    # across every included file for this whole resolve_repo() call (shared, never reset per file), and
+    # runs -- CFG_INCLUDE_MAX_LINES and CFG_INCLUDE_MAX_CHARS bound the total lines read and bytes charged
+    # across every included file for this whole resolve_repo() call (shared, never reset per file; both
+    # count bytes under the hook's C locale), and
     # CFG_INCLUDE_MAX_LINE_CHARS caps one line's length, checked with the cheap ${#cfgline}, never by running
     # comment-strip or trim first (trim can cost real seconds on a very long line). None of the three applies
     # to a depth-0 candidate, which is read in full; its line LENGTH is capped separately just below.

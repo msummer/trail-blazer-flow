@@ -269,6 +269,20 @@ p_1_5_guarded()        { printf 'git branch -D "$stale" || true\n' | append "$1/
 p_1_8()               { edit "$1/bin/setup-labels.sh" 's/^create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue: /create_or_update "multi-pr"        "C5DEF5" "Multi-PR issue (this description is deliberately padded well past the one-hundred-character limit): /'; }
 p_1_9()                { printf 'gh issue close "$n" >/dev/null\n' | append "$1/bin/harness-status.sh"; }
 p_1_9_guarded()         { printf 'gh issue close "$n" || true\n' | append "$1/bin/harness-status.sh"; }
+# p_1_10* (#669) — pin assertion 1.10, the top-level `export LC_ALL=C` ahead of a script's first
+# bracket range or POSIX class. p_1_10 removes the export from a script that has ranges; p_1_10_late
+# appends a range to a script's own set line, ahead of its export, so the export exists but comes
+# too late; p_1_10_class is the POSIX-class shape in a script with no export; p_1_10_explicit_script
+# is a range in the one script that spells ranges as explicit lists and so carries no export. The
+# two controls are a comment naming a range and a quoted test operand holding a hyphen, neither of
+# which the heuristic may flag.
+p_1_10()               { drop "$1/bin/tracker-sync.sh" '^export LC_ALL=C$'; }
+p_1_10_late()          { edit "$1/bin/merge-floor.sh" 's/^set -uo pipefail$/set -uo pipefail; case "${1:-}" in *[!0-9]*) : ;; esac/'; }
+p_1_10_hook()          { drop "$1/hooks/claude-dir-guard.sh" '^export LC_ALL=C$'; }
+p_1_10_class()         { printf 'case "$x" in *[[:space:]]*) : ;; esac\n' | append "$1/bin/harness-version.sh"; }
+p_1_10_explicit_script() { printf 'case "$x" in *[!0-9]*) : ;; esac\n' | append "$1/bin/codex-scheduled-run.sh"; }
+p_1_10_comment()       { printf '# example only: case "$x" in *[a-z]*) : ;; esac (comment text, not code)\n' | append "$1/bin/harness-version.sh"; }
+p_1_10_test_bracket()  { printf '[ "$a" = "b-c" ] || :\n' | append "$1/bin/harness-version.sh"; }
 p_1_1_hooks()          { printf 'if [\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6()                { printf 'eval "$x"\n' | append "$1/hooks/git-c-guard.sh"; }
 p_1_6_comment() {
@@ -904,6 +918,13 @@ cases=(
   "1.8|1.8|p_1_8|pad one create_or_update description in bin/setup-labels.sh past GitHub's 100-character limit (characters inserted inside the quoted field) -- measured: \"1.8 label description(s) in bin/setup-labels.sh exceed GitHub's 100-character limit — gh label create/edit returns HTTP 422 and setup-labels.sh aborts there: multi-pr(147)\" (79 pass, 1 fail)"
   "1.9|1.9|p_1_9|append a bare, unchecked 'gh issue close' to bin/harness-status.sh (#355)"
   "1.9-guarded||p_1_9_guarded|control: the same write with a '|| true' fallback is not flagged"
+  "1.10|1.10|p_1_10|remove the top-level export LC_ALL=C line from bin/tracker-sync.sh (#669)"
+  "1.10-hook|1.10|p_1_10_hook|remove the top-level export LC_ALL=C line from hooks/claude-dir-guard.sh (the hooks/ scan)"
+  "1.10-late|1.10|p_1_10_late|append a bracket range to bin/merge-floor.sh's set line, ahead of its export LC_ALL=C"
+  "1.10-class|1.10|p_1_10_class|append a [[:space:]] class test to bin/harness-version.sh, which has no export"
+  "1.10-explicit-script|1.10|p_1_10_explicit_script|append a [!0-9] range to bin/codex-scheduled-run.sh, which uses explicit lists and has no export"
+  "1.10-comment||p_1_10_comment|control: a single #-comment naming a bracket range is not flagged"
+  "1.10-test-bracket||p_1_10_test_bracket|control: a [ ] test with a quoted hyphenated operand is not flagged"
   "1.1-hooks|1.1|p_1_1_hooks|append a stray 'if [' to hooks/git-c-guard.sh (proves the glob extension)"
   "1.6|1.6|p_1_6|append a bare 'eval \"\$x\"' line to hooks/git-c-guard.sh"
   "1.6-comment||p_1_6_comment|control: a single #-comment naming eval is not flagged"

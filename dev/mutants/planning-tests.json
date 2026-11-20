@@ -2005,6 +2005,67 @@
       "expect_fail": [
         "tracker-cycle-note-reject"
       ]
+    },
+    {
+      "name": "669-tracker-locale-off",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-locale-",
+      "edits": [
+        {
+          "from": "set -uo pipefail\nexport LC_ALL=C\n",
+          "to": "set -uo pipefail\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-locale-child-env",
+        "tracker-locale-section-id"
+      ]
+    },
+    {
+      "name": "669-tracker-url-ascii-off",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-c-heading-url",
+      "edits": [
+        {
+          "from": "  case \"$tracker_url\" in\n    *[![:print:]]*) tracker_reason=\"bad-url\"; return 0 ;;\n  esac\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "tracker-c-heading-url"
+      ]
+    },
+    {
+      "name": "669-tracker-heading-bytes",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-c-heading-url",
+      "edits": [
+        {
+          "from": "    [ \"$(jq -rn --arg h \"$head\" '($h|length) <= 120 and ($h|test(\"[\\u0080-\\u009f]\")|not)' 2>/dev/null)\" = \"true\" ] || return 1\n",
+          "to": "    [ \"${#head}\" -le 120 ] || return 1\n"
+        }
+      ],
+      "expect_fail": [
+        "tracker-c-heading-url"
+      ]
+    },
+    {
+      "name": "669-tracker-heading-c1-off",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-c-heading-url",
+      "edits": [
+        {
+          "from": " and ($h|test(\"[\\u0080-\\u009f]\")|not)'",
+          "to": "'"
+        }
+      ],
+      "expect_fail": [
+        "tracker-c-heading-url"
+      ]
     }
   ]
 }

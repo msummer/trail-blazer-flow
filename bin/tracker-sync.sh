@@ -17,12 +17,13 @@
 # depth) whose FIRST fenced block holds `url: https://...` and, optionally, up to 8 repeatable
 # `section: <id> <path>#<heading>` lines, up to 8 repeatable `label-state: <label>=<state>`
 # lines and at most one `cycle-note: on|off` line — blank lines and '#' comment lines are
-# skipped; any other line is an unknown key. Exactly one url is required, https, no whitespace, quote, angle bracket
-# or backtick. A section value is an id of 1-40 [a-z0-9-] characters (unique, starting with
+# skipped; any other line is an unknown key. Exactly one url is required, https, printable ASCII
+# only, no whitespace, quote, angle bracket or backtick. A section value is an id of 1-40 [a-z0-9-] characters (unique, starting with
 # [a-z0-9]), whitespace, a repo-relative .md path of [A-Za-z0-9._/-] (no leading or trailing '/',
 # no empty, '.' or '..' segment, at most 200 characters), '#', and an exact heading of 1-120
-# characters (no control character, not starting with '#'). A label-state value is a
-# label (1-50 characters of [A-Za-z0-9 ._:/+-], trailing whitespace trimmed), '=', and a state that
+# characters (no control character, not starting with '#'). The script reads every value in the
+# C locale: whitespace and trims are ASCII whitespace, and ranges are byte ranges. A label-state
+# value is a label (1-50 characters of [A-Za-z0-9 ._:/+-], trailing whitespace trimmed), '=', and a state that
 # is exactly parked, external or held; the label may not be one the state chain reads itself
 # (plan-proposed, plan-approved, pr-open, impl-blocked, needs-human, no-plan, triaged-held), and
 # no two labels may be equal ignoring ASCII case. No such heading, or no CLAUDE.md, means the repo
@@ -125,7 +126,7 @@
 # site=pr-files. No path is stored or printed.
 
 set -uo pipefail
-
+export LC_ALL=C
 LBL_PROPOSED="plan-proposed"
 LBL_APPROVED="plan-approved"
 LBL_PR_OPEN="pr-open"
@@ -266,7 +267,10 @@ parse_section_values() {
     seg="${path##*/}"
     [ "$seg" != ".md" ] || return 1
     [ -n "$head" ] || return 1
-    [ "${#head}" -le 120 ] || return 1
+    # The C locale makes ${#head} count bytes and [[:cntrl:]] ASCII-only, so the documented
+    # "1-120 characters, no control character" is kept by one jq predicate (codepoint length,
+    # no C1 control U+0080-U+009F); ASCII controls are rejected by the case below.
+    [ "$(jq -rn --arg h "$head" '($h|length) <= 120 and ($h|test("[\u0080-\u009f]")|not)' 2>/dev/null)" = "true" ] || return 1
     case "$head" in
       "#"*|*[[:cntrl:]]*) return 1 ;;
     esac
@@ -398,6 +402,9 @@ parse_section() {
   esac
   case "$tracker_url" in
     *[[:space:]]*|*[[:cntrl:]]*|*"$q"*|*"$dq"*|*"<"*|*">"*|*"$bt"*) tracker_reason="bad-url"; return 0 ;;
+  esac
+  case "$tracker_url" in
+    *[![:print:]]*) tracker_reason="bad-url"; return 0 ;;
   esac
   if ! parse_section_values; then tracker_reason="bad-section"; return 0; fi
   if ! parse_label_states; then tracker_reason="bad-label-state"; return 0; fi

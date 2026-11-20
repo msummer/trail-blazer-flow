@@ -106,7 +106,7 @@
 # Exit 0 = no FAILs (WARNs allowed). Exit 1 = at least one FAIL. Exit 2 = usage error
 # (--provider requires claude or codex; see -h/--help).
 set -uo pipefail
-
+export LC_ALL=C
 pass=0; warn=0; fail=0
 ok()  { echo "  PASS  $1"; pass=$((pass+1)); }
 wrn() { echo "  WARN  $1"; warn=$((warn+1)); }

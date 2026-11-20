@@ -125,7 +125,7 @@
 # acquire for a single field isn't worth it, and this file's six-file lock-record layout is
 # unaffected either way.
 set -uo pipefail
-
+export LC_ALL=C
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 
 # The subcommand vocabulary — kept as one grep-extractable line (dev/selfcheck.sh's 4.36

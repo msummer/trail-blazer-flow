@@ -40,10 +40,13 @@ cycle-note: on
 ````
 
 Blank lines and `#` comment lines inside the fence are skipped; any other line is an unknown key.
+The script reads every value in the C locale, so "whitespace" and "trimmed" below mean ASCII
+whitespace and the character ranges are byte ranges (a heading's length still counts characters, and
+rejects a C1 control character).
 
 | Key | Times | Value |
 |---|---|---|
-| `url:` | exactly once | starts `https://` and holds no whitespace, control character, quote, angle bracket or backtick (`bad-url` otherwise) |
+| `url:` | exactly once | starts `https://` and is printable ASCII only, with no whitespace, control character, quote, angle bracket or backtick (`bad-url` otherwise) |
 | `section:` | 0 to 8 | `<id> <path>#<heading>` (`bad-section` otherwise): an id of 1-40 characters from `a-z0-9-`, starting with `a-z0-9` and unique; whitespace; a repo-relative path of 1-200 characters from `A-Za-z0-9._/-` ending in `.md` (a last segment of exactly `.md` is rejected), with no leading or trailing `/` and no empty, `.` or `..` segment; `#`; and the exact heading text, trimmed, 1-120 characters, with no control character and not starting with `#` |
 | `label-state:` | 0 to 8 | `<label>=<state>` (`bad-label-state` otherwise): a label of 1-50 characters from `A-Za-z0-9 ._:/+-` (a space is allowed; whitespace before the `=` is trimmed), exactly one `=`, and a state that is exactly `parked`, `external` or `held`. The label may not be one the state chain reads itself (`plan-proposed`, `plan-approved`, `pr-open`, `impl-blocked`, `needs-human`, `no-plan`, `triaged-held`), and no two labels may be equal ignoring ASCII case |
 | `cycle-note:` | 0 or 1 | exactly `on` or `off` (`bad-cycle-note` otherwise, also for a repeated key); absent means `off` |

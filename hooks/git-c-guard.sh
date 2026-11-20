@@ -17,7 +17,7 @@
 # stdout and exit 0 when every `git -C` invocation in tool_input.command conforms; otherwise
 # print nothing and exit 0. Wired in hooks/hooks.json via `${CLAUDE_PLUGIN_ROOT}`.
 set -uo pipefail
-
+export LC_ALL=C
 input="$(cat)"
 
 # Fast path: skip the jq spawn for the overwhelming majority of Bash calls that never mention

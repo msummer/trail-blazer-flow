@@ -197,7 +197,7 @@
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
-
+export LC_ALL=C
 # --carry-over (#312, ADR 0001 decision 6) — opt-in flag, off by default. With no argument the
 # script's behaviour and output are exactly what they were before this flag existed: no
 # awaiting_approval bucket, no new counts keys, and no extra `gh api` call. Any argument other

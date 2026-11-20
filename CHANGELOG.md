@@ -16,6 +16,12 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #669: bracket ranges in `bin/` and `hooks/` scripts no longer follow the caller's locale (the
+  tracker accepted `A` or accented text in a section id under macOS's default); gate assertion 1.10
+  requires the C-locale export. A tracker url is now printable ASCII only.
+
 ## v3.7.1
 
 This patch release closes the two security findings from Open Capital's review of v3.7.0.

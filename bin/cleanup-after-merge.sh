@@ -134,7 +134,7 @@
 #
 # Requires: gh (authenticated), jq, git. Run from anywhere inside the repo.
 set -euo pipefail
-
+export LC_ALL=C
 FIX=false
 [[ "${1:-}" == "--fix" ]] && FIX=true
 

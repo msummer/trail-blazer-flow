@@ -85,7 +85,7 @@
 # what callers read. 'set -f' keeps ledger/JSON text out of pathname expansion.
 set -uo pipefail
 set -f
-
+export LC_ALL=C
 script_dir="$(cd "$(dirname "$0")" && pwd)"
 
 usage() {

@@ -282,7 +282,7 @@
 #
 # Requires: gh (authenticated), jq. Run from anywhere inside the repo.
 set -euo pipefail
-
+export LC_ALL=C
 LIMIT=100
 # RETRY_SLEEP (#284): the implementer-side twin of bin/find-planning-work.sh's
 # ASSOCIATION_RETRY_SLEEP — same value (30s), a different name because this script has no
@@ -659,12 +659,12 @@ for n in $ready_numbers; do
       # to one), `reverse` makes the result newest-first, so history_json's first element is always
       # the SAME event $latest picks via `sort | tail -1`. `(. / " ")` splits "<created_at> <actor>"
       # the same way `cut -d' ' -f1` / `-f2-` do below, so approved_at derived from $latest and
-      # from history_json[0] always agree. approved_by can differ from history_json[0]'s in the
+      # from history_json[0] always agree. approved_by agrees with history_json[0]'s too, even in the
       # narrow case of two plan-approved events sharing the identical created_at second with
-      # different actor logins: shell `sort` (locale collation) and jq's `unique` (codepoint
-      # order) can then order those two event lines differently, picking a different login as
-      # "last" — approved_at itself is untouched, so the merge floor (which matches on approved_at,
-      # never approved_by) is unaffected.
+      # different actor logins: shell `sort` (byte order, this script runs in the C locale) and
+      # jq's `unique` (codepoint order, the same order for these ASCII lines) agree on their
+      # order, so approved_by is the same login either way. The merge floor (which matches on
+      # approved_at, never approved_by) is unaffected.
       history_json=$(printf '%s\n' "$events" | jq -R -s '
         split("\n") | map(select(length > 0)) | unique | reverse
         | map((. / " ") as $p | {approved_at: $p[0], approved_by: ($p[1:] | join(" "))})')
