@@ -646,7 +646,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.7.1)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.7.2)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -769,6 +769,8 @@ file to the tracker's URL.
 **v3.7.0 → v3.7.1**: nothing to re-copy. The merge floor now trusts a verdict comment only from
 the PR's own author as OWNER, MEMBER or COLLABORATOR, so open and verify each harness PR from one
 account; Autonomy mode releases a Dependabot PR only when Dependabot itself opened it.
+
+**v3.7.1 → v3.7.2**: nothing to re-copy.
 
 </details>
 

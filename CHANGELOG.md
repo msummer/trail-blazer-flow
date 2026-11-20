@@ -16,7 +16,11 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.7.2
+
+This patch release makes the input checks in `bin/` and `hooks/` scripts independent of the
+caller's locale, which fixes the macOS selfcheck job that had been red since v3.7.0. It is also the
+first tagged release carrying v3.7.1's merge-floor fixes: v3.7.1 was never tagged. No new grant.
 
 - #669: bracket ranges in `bin/` and `hooks/` scripts no longer follow the caller's locale (the
   tracker accepted `A` or accented text in a section id under macOS's default); gate assertion 1.10
