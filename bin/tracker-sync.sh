@@ -6,17 +6,19 @@
 # `tracker` skill — the only place the Artifact/ArtifactData tools exist — pushes that file to the
 # tracker's database. This script never calls an artifact tool and never writes to GitHub.
 #
-# USAGE: tracker-sync.sh [page | cycle-note <run-id> -] [-h|--help]
+# USAGE: tracker-sync.sh [page | narrative | cycle-note <run-id> -] [-h|--help]
 #   (no argument)  sync mode: read the repo's "Tracker" section, query GitHub, write state.json.
 #   page           write a copy of templates/tracker/index.html with @REPO_NAME@ replaced by the
 #                  repo's short name, to the same directory, for the skill to publish.
+#   narrative      with `narrative: on` in the section, name the snapshot file the tracker skill's
+#                  Narrative refresh reads and the document it writes. No gh call, nothing written.
 #   cycle-note <run-id> -   with `cycle-note: on` in the section, read dispatch-ledger records from
 #                  stdin and write <dir>/last-cycle.json, the opt-in cycle note's document (#650).
 #
 # THE "TRACKER" SECTION of the working-tree CLAUDE.md: a heading titled exactly "Tracker" (any '#'
 # depth) whose FIRST fenced block holds `url: https://...` and, optionally, up to 8 repeatable
 # `section: <id> <path>#<heading>` lines, up to 8 repeatable `label-state: <label>=<state>`
-# lines and at most one `cycle-note: on|off` line — blank lines and '#' comment lines are
+# lines, at most one `cycle-note: on|off` line and at most one `narrative: on|off` line — blank lines and '#' comment lines are
 # skipped; any other line is an unknown key. Exactly one url is required, https, printable ASCII
 # only, no whitespace, quote, angle bracket or backtick. A section value is an id of 1-40 [a-z0-9-] characters (unique, starting with
 # [a-z0-9]), whitespace, a repo-relative .md path of [A-Za-z0-9._/-] (no leading or trailing '/',
@@ -36,7 +38,7 @@
 # STDOUT, sync mode:
 #   no section:  tracker=absent                      (exit 0; no gh call, nothing written)
 #   malformed:   tracker=malformed, then reason=<no-fence|unknown-key|no-url|multiple-urls|bad-url|
-#                bad-section|bad-label-state|bad-cycle-note>, checked in that order (exit 1; no gh
+#                bad-section|bad-label-state|bad-cycle-note|bad-narrative>, checked in that order (exit 1; no gh
 #                call, nothing written)
 #   skip:        result=skip, then reason=query-failed site=<repo|milestones|issues-open|
 #                issues-closed|issues-recent|prs|pr-files|branch|ci|tree|section|issues-refs> | reason=too-large bytes=<n> |
@@ -55,6 +57,11 @@
 #   tracker=present, url, dir, file=<dir>/last-cycle.json, collection=sections, doc=last-cycle,
 #   issues=<n>, result=ready. A stale last-cycle.json is removed first; no gh call; state.json is
 #   never touched. A wrong argument count or a third argument other than - is exit 2.
+# STDOUT, narrative mode: tracker=absent (exit 0) or tracker=malformed, reason=<token> (exit 1) as in
+#   sync mode; tracker=present, narrative=off (exit 0) when the key is absent or off; with the key
+#   on, result=skip with reason=no-snapshot (exit 1) when <dir>/state.json does not exist, else
+#   tracker=present, url, dir, file=<dir>/state.json, collection=harness, doc=narrative,
+#   result=ready. An extra argument is exit 2.
 # STDOUT, page mode: tracker=<absent|present|malformed>, then url=<url> (present) or
 #   reason=<token> (malformed), then page=<dir>/index.html and result=ready; a failed repo read is
 #   result=skip with reason=query-failed site=repo, and an unusable repo name is
@@ -174,19 +181,20 @@ mode="sync"
 case "${1:-}" in
   "") : ;;
   page) mode="page" ;;
+  narrative) mode="narrative" ;;
   cycle-note) mode="cycle-note" ;;
   -h|--help) usage; exit 0 ;;
-  *) echo "tracker-sync.sh: unknown argument: $1 (usage: tracker-sync.sh [page | cycle-note <run-id> -])" >&2; exit 2 ;;
+  *) echo "tracker-sync.sh: unknown argument: $1 (usage: tracker-sync.sh [page | narrative | cycle-note <run-id> -])" >&2; exit 2 ;;
 esac
 note_run_id=""
 if [ "$mode" = "cycle-note" ]; then
   if [ "$#" -ne 3 ] || [ "$3" != "-" ]; then
-    echo "tracker-sync.sh: cycle-note takes a run id and - (usage: tracker-sync.sh [page | cycle-note <run-id> -])" >&2
+    echo "tracker-sync.sh: cycle-note takes a run id and - (usage: tracker-sync.sh [page | narrative | cycle-note <run-id> -])" >&2
     exit 2
   fi
   note_run_id="$2"
 elif [ "$#" -gt 1 ]; then
-  echo "tracker-sync.sh: too many arguments (usage: tracker-sync.sh [page | cycle-note <run-id> -])" >&2
+  echo "tracker-sync.sh: too many arguments (usage: tracker-sync.sh [page | narrative | cycle-note <run-id> -])" >&2
   exit 2
 fi
 
@@ -207,6 +215,7 @@ tracker_state="absent"
 tracker_url=""
 tracker_reason=""
 tracker_cycle_note="off"
+tracker_narrative="off"
 
 # The declared repo-file sections, filled by parse_section_values: sec_n entries in declaration
 # order. Always iterate by index up to sec_n, never "${sec_id[@]}": an empty array is an unbound
@@ -321,7 +330,7 @@ parse_label_states() {
 }
 
 parse_section() {
-  local cm="$top/CLAUDE.md" section fence line v urls=0 unknown=0 cnotes=0 cn_val=""
+  local cm="$top/CLAUDE.md" section fence line v urls=0 unknown=0 cnotes=0 cn_val="" narrs=0 nar_val=""
   [ -f "$cm" ] || return 0
   # Fence-aware like bin/check-harness.sh's claude_md_section: a heading inside a fenced block
   # neither starts the section nor ends it. The first output line is a marker proving the heading.
@@ -386,6 +395,13 @@ parse_section() {
         cnotes=$((cnotes + 1))
         cn_val="$v"
         ;;
+      narrative:*)
+        v="${v#narrative:}"
+        v="${v#"${v%%[![:space:]]*}"}"
+        v="${v%"${v##*[![:space:]]}"}"
+        narrs=$((narrs + 1))
+        nar_val="$v"
+        ;;
       *) unknown=1 ;;
     esac
   done <<<"$fence"
@@ -415,6 +431,13 @@ parse_section() {
       *) tracker_reason="bad-cycle-note"; return 0 ;;
     esac
   fi
+  if [ "$narrs" -gt 1 ]; then tracker_reason="bad-narrative"; return 0; fi
+  if [ "$narrs" -eq 1 ]; then
+    case "$nar_val" in
+      on|off) tracker_narrative="$nar_val" ;;
+      *) tracker_reason="bad-narrative"; return 0 ;;
+    esac
+  fi
   tracker_state="present"
   tracker_reason=""
 }
@@ -435,6 +458,11 @@ fi
 if [ "$mode" = "cycle-note" ] && [ "$tracker_cycle_note" != "on" ]; then
   echo "tracker=present"
   echo "cycle-note=off"
+  exit 0
+fi
+if [ "$mode" = "narrative" ] && [ "$tracker_narrative" != "on" ]; then
+  echo "tracker=present"
+  echo "narrative=off"
   exit 0
 fi
 
@@ -480,6 +508,21 @@ if [ "$mode" = "page" ]; then
   sed "s#@REPO_NAME@#$name#g" "$tmpl" > "$work/index.html" || skip "build-failed"
   mv "$work/index.html" "$dir/index.html" || skip "build-failed"
   echo "page=$dir/index.html"
+  echo "result=ready"
+  exit 0
+fi
+
+# --- narrative mode ---------------------------------------------------------------------------
+# Names the last sync's snapshot for the skill's Narrative refresh. It reads nothing but the
+# section and the file's existence, calls no gh and writes nothing.
+if [ "$mode" = "narrative" ]; then
+  [ -f "$dir/state.json" ] || skip "no-snapshot"
+  echo "tracker=present"
+  echo "url=$tracker_url"
+  echo "dir=$dir"
+  echo "file=$dir/state.json"
+  echo "collection=harness"
+  echo "doc=narrative"
   echo "result=ready"
   exit 0
 fi

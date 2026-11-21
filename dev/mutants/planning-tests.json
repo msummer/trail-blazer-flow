@@ -1374,7 +1374,7 @@
       "filter": "tracker-",
       "edits": [
         {
-          "from": "    \"governance-path\": \"governance path\",\n",
+          "from": "    \"governance-path\": \"Only you can merge\",\n",
           "to": ""
         }
       ],
@@ -1411,6 +1411,7 @@
       "expect_fail": [
         "tracker-absent",
         "tracker-cycle-note-off",
+        "tracker-narrative-mode",
         "tracker-no-claude-md"
       ]
     },
@@ -1421,7 +1422,7 @@
       "filter": "tracker-",
       "edits": [
         {
-          "from": ".mx-s[data-m=\"partial\"] { color: var(--wait); border-color: var(--wait); }\n",
+          "from": ".mx-s[data-m=\"partial\"] { background: var(--active-bg); color: var(--active); }\n",
           "to": ""
         }
       ],
@@ -1466,8 +1467,8 @@
       "filter": "tracker-",
       "edits": [
         {
-          "from": "guardSection(sectionBlock, s, byNum, h.repoUrl)",
-          "to": "sectionBlock(s, byNum, h.repoUrl)"
+          "from": "guardSection(sectionBlock, s, ctx)",
+          "to": "sectionBlock(s, ctx)"
         }
       ],
       "expect_fail": [
@@ -1481,8 +1482,8 @@
       "filter": "tracker-",
       "edits": [
         {
-          "from": "try {\n      return build(s, byNum, repoUrl);\n    } catch (e) {\n      var id = s && typeof s === \"object\" && typeof s.id === \"string\" && s.id ? s.id : \"\";\n      var box = el(\"div\");\n      box.appendChild(el(\"p\", \"muted\", id ? \"Could not render the section \" + id + \".\" : \"Could not render a section.\"));\n      return box;\n    }",
-          "to": "return build(s, byNum, repoUrl);"
+          "from": "try {\n      return build(s, ctx);\n    } catch (e) {\n      var id = s && typeof s === \"object\" && typeof s.id === \"string\" && s.id ? s.id : \"\";\n      var box = el(\"div\");\n      box.appendChild(el(\"p\", \"muted\", id ? \"Could not render the section \" + id + \".\" : \"Could not render a section.\"));\n      return box;\n    }",
+          "to": "return build(s, ctx);"
         }
       ],
       "expect_fail": [
@@ -2065,6 +2066,66 @@
       ],
       "expect_fail": [
         "tracker-c-heading-url"
+      ]
+    },
+    {
+      "name": "narrative-key-once",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "narrative",
+      "edits": [
+        {
+          "from": "if [ \"$narrs\" -gt 1 ]; then",
+          "to": "if [ \"$narrs\" -gt 99 ]; then"
+        }
+      ],
+      "expect_fail": [
+        "tracker-malformed-bad-narrative"
+      ]
+    },
+    {
+      "name": "narrative-default-on",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "narrative",
+      "edits": [
+        {
+          "from": "tracker_narrative=\"off\"",
+          "to": "tracker_narrative=\"on\""
+        }
+      ],
+      "expect_fail": [
+        "tracker-narrative-mode"
+      ]
+    },
+    {
+      "name": "narrative-no-snapshot",
+      "target": "bin/tracker-sync.sh",
+      "suite": "dev/planning-tests.sh",
+      "filter": "narrative",
+      "edits": [
+        {
+          "from": "  [ -f \"$dir/state.json\" ] || skip \"no-snapshot\"\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "tracker-narrative-mode"
+      ]
+    },
+    {
+      "name": "path-css-drop",
+      "target": "templates/tracker/index.html",
+      "suite": "dev/planning-tests.sh",
+      "filter": "tracker-",
+      "edits": [
+        {
+          "from": "svg .node.late { fill: var(--warn-bg); stroke: var(--warn); }\n",
+          "to": ""
+        }
+      ],
+      "expect_fail": [
+        "tracker-template-path-states"
       ]
     }
   ]

@@ -16,6 +16,15 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
+## Unreleased
+
+- #PRNUM: the live tracker page is redesigned: a summary first (progress, where we stand, waiting on
+  you), filled state pills, segmented progress bars, a people table, and three new hand-written
+  section kinds (`path`, `cards`, `steps`). A new opt-in `narrative: on` line in the "Tracker"
+  section has the cycle's closing step refresh a lead, per-issue notes, gaps and next steps. The
+  page now loads its typefaces from Google Fonts. Consumer step: re-publish an existing tracker
+  page (`tracker-sync.sh page`, then publish the printed `page=` file to the tracker's URL).
+
 ## v3.7.2
 
 This patch release makes the input checks in `bin/` and `hooks/` scripts independent of the
