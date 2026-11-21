@@ -16,7 +16,10 @@ and fixture/case comments, or, for a migrated mutant, its `dev/mutants/*.json` r
 CLAUDE.md's Conventions). At release time, retitle the `##
 Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README's "Releasing a new version").
 
-## Unreleased
+## v3.8.0
+
+This release redesigns the live tracker page and adds an opt-in written summary that the cycle
+refreshes. No new grant. To see the new page, re-publish an existing tracker (see #672 below).
 
 - #672: the live tracker page is redesigned: a summary first (progress, where we stand, waiting on
   you), filled state pills, segmented progress bars, a people table, and three new hand-written
