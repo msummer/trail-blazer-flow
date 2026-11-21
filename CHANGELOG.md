@@ -18,7 +18,7 @@ Unreleased` heading to `## vX.Y.Z` (see CLAUDE.md's "Release ritual" and README'
 
 ## Unreleased
 
-- #PRNUM: the live tracker page is redesigned: a summary first (progress, where we stand, waiting on
+- #672: the live tracker page is redesigned: a summary first (progress, where we stand, waiting on
   you), filled state pills, segmented progress bars, a people table, and three new hand-written
   section kinds (`path`, `cards`, `steps`). A new opt-in `narrative: on` line in the "Tracker"
   section has the cycle's closing step refresh a lead, per-issue notes, gaps and next steps. The
