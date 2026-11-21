@@ -677,7 +677,7 @@ check-harness.sh
 It lists what the new version needs that your repo is missing. Fix what it flags and you're done.
 
 <details>
-<summary>Per-version migration notes (v1.9.0 → v3.7.2)</summary>
+<summary>Per-version migration notes (v1.9.0 → v3.8.0)</summary>
 
 For older history, see `CHANGELOG.md`'s archive (the "README.md: per-repo migration notes, v1.9.0
 to v2.7.7" subsection).
@@ -802,6 +802,10 @@ the PR's own author as OWNER, MEMBER or COLLABORATOR, so open and verify each ha
 account; Autonomy mode releases a Dependabot PR only when Dependabot itself opened it.
 
 **v3.7.1 → v3.7.2**: nothing to re-copy.
+
+**v3.7.2 → v3.8.0**: nothing to re-copy. To get the redesigned tracker page, re-publish an existing
+tracker from the checkout that created it: run `tracker-sync.sh page` and publish the printed
+`page=` file to the tracker's URL.
 
 </details>
 
