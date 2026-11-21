@@ -4,9 +4,11 @@
 > or "The CLAUDE.md contract" refers to a heading in this reference set or in the top-level
 > [README](../../README.md) — the [index](README.md#where-each-section-lives) says which file holds it.
 
-A repo can have one **live tracker**: a private artifact page showing every open milestone's issues
-with their state, PR links, dependencies and progress, what is waiting on you, and what shipped
-in the last 14 days. GitHub stays the source of truth; the tracker
+A repo can have one **live tracker**: a private artifact page that opens with a summary (progress,
+where things stand, what is waiting on you), then shows what people need to provide, what shipped
+in the last 14 days, and every open milestone's issues with their state, PR links and
+dependencies. With `narrative: on` the orchestrating session also keeps a short lead, a note per
+waiting issue, a list of gaps and the next steps up to date (see "The narrative"). GitHub stays the source of truth; the tracker
 is a projection of it, rebuilt in full on every sync, so a missed or failed sync fixes itself on
 the next one. **Nothing flows from the tracker to GitHub**: it never changes an issue, label, PR or
 comment, and each row links to its issue, where you comment directly.
@@ -15,13 +17,45 @@ Three parts:
 
 - `bin/tracker-sync.sh` — read-only and mechanical. It reads the repo's "Tracker" section, queries
   `gh`, reads the checkout's local verification baseline file, and writes one snapshot file; its
-  `cycle-note` mode writes the opt-in cycle note's document (see "The cycle note"). It never calls
+  `cycle-note` mode writes the opt-in cycle note's document (see "The cycle note") and its
+  `narrative` mode names the snapshot for the opt-in narrative refresh. It never calls
   an artifact tool.
-- `skills/tracker/SKILL.md` — the procedures (Create, Sync, People read-back, Hand-written update).
+- `skills/tracker/SKILL.md` — the procedures (Create, Sync, People read-back, Hand-written
+  update), with the Narrative refresh in `skills/tracker/references/narrative.md`.
   Only the orchestrating session can run them: the `Artifact` and `ArtifactData` tools exist
   nowhere else.
 - `templates/tracker/index.html` — one generic page, with no project content apart from the
-  repo's short name. Everything specific to a repo lives in the artifact's database.
+  repo's short name. Everything specific to a repo lives in the artifact's database. The page
+  loads three typefaces from Google Fonts (`fonts.googleapis.com`, `fonts.gstatic.com`), so each
+  viewer's browser makes a request there; it falls back to system fonts when that fails, and
+  makes no other external request.
+
+## The page
+
+Top to bottom:
+
+1. **Header**: the repo and commit, the title, the narrative's lead when there is one, and a
+   status line (when the snapshot was checked, flagged stale after 24 hours; CI on the default
+   branch; the baseline; a note when a list was cut short).
+2. **Progress**: with open milestones, how many of their issues are done; without any, the pull
+   requests merged in the last 14 days beside the open issue count. Then the open pull requests
+   and what is waiting on you, a bar with one segment per issue coloured by state (one segment per
+   colour, sized by share, past 60 issues), and the non-zero state counts.
+3. **Where we stand**: three cards drawn from the snapshot and the people items: done, can move
+   now (issues with a PR open, a plan approved, a plan to review or no plan yet, and no open
+   blocker), and waiting on people.
+4. **Waiting on you**. More than three `solo-merge` items are folded behind one line, and they
+   are counted apart from the "waiting on you" figure, because a repo where one account authors
+   and merges carries that flag on most merges.
+5. Hand-written sections whose `order` is below 0.
+6. **What people need to provide**: the people items as a table.
+7. **What shipped**: the newest 10 rows, the rest behind "Show more".
+8. The other hand-written sections, then the repo-file sections.
+9. Each open milestone with its own bar and issue rows, then "No milestone".
+
+A state shows as a filled pill with a plain label ("Plan to review", "Waits on others", "Needs
+you"); the snapshot's state tokens are unchanged. A fold a viewer opened stays open across live
+updates until the page is reloaded.
 
 ## The "Tracker" section (CLAUDE.md contract item 11)
 
@@ -36,6 +70,7 @@ url: https://<the artifact's address>
 section: milestones docs/roadmap.md#Milestones
 label-state: waiting-on-vendor=external
 cycle-note: on
+narrative: on
 ```
 ````
 
@@ -50,11 +85,12 @@ rejects a C1 control character).
 | `section:` | 0 to 8 | `<id> <path>#<heading>` (`bad-section` otherwise): an id of 1-40 characters from `a-z0-9-`, starting with `a-z0-9` and unique; whitespace; a repo-relative path of 1-200 characters from `A-Za-z0-9._/-` ending in `.md` (a last segment of exactly `.md` is rejected), with no leading or trailing `/` and no empty, `.` or `..` segment; `#`; and the exact heading text, trimmed, 1-120 characters, with no control character and not starting with `#` |
 | `label-state:` | 0 to 8 | `<label>=<state>` (`bad-label-state` otherwise): a label of 1-50 characters from `A-Za-z0-9 ._:/+-` (a space is allowed; whitespace before the `=` is trimmed), exactly one `=`, and a state that is exactly `parked`, `external` or `held`. The label may not be one the state chain reads itself (`plan-proposed`, `plan-approved`, `pr-open`, `impl-blocked`, `needs-human`, `no-plan`, `triaged-held`), and no two labels may be equal ignoring ASCII case |
 | `cycle-note:` | 0 or 1 | exactly `on` or `off` (`bad-cycle-note` otherwise, also for a repeated key); absent means `off` |
+| `narrative:` | 0 or 1 | exactly `on` or `off` (`bad-narrative` otherwise, also for a repeated key); absent means `off` |
 
 No heading, or no `CLAUDE.md`, means the repo has no tracker. A malformed section makes each sync
 print `tracker=malformed` and `reason=<token>` (`no-fence`, `unknown-key`, `no-url`,
-`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, `bad-cycle-note`, checked in the order `unknown-key`,
-`no-url`/`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, `bad-cycle-note`) and skip. The section is read from the working
+`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, `bad-cycle-note`, `bad-narrative`, checked in the order `unknown-key`,
+`no-url`/`multiple-urls`, `bad-url`, `bad-section`, `bad-label-state`, `bad-cycle-note`, `bad-narrative`) and skip. The section is read from the working
 tree; a `section:` file is read from the default branch at the snapshot's `mainSha`, never from the
 working tree (see "Repo-file sections"). The doctor does not validate it. The section
 is committed, so a wrong URL is a reviewed change; a URL copied from another repo's tracker would
@@ -62,7 +98,7 @@ be overwritten by this repo's snapshot, and the page's `repo` field makes that v
 
 ## `tracker-sync.sh`
 
-`tracker-sync.sh` (sync), `tracker-sync.sh page` and `tracker-sync.sh cycle-note <run-id> -`. Exit 0 = ready or absent; 1 = malformed
+`tracker-sync.sh` (sync), `tracker-sync.sh page`, `tracker-sync.sh narrative` and `tracker-sync.sh cycle-note <run-id> -`. Exit 0 = ready or absent; 1 = malformed
 section or skip; 2 = usage or environment error (unknown argument, not in a git repository, `jq`
 or `gh` missing). Output goes to `<absolute git-common-dir>/trail-blazer/tracker/`, never into the
 tracked tree.
@@ -100,6 +136,13 @@ In the first three rows it reads neither the run id nor stdin. It makes no `gh` 
 from short-lived temp files in `<dir>`, removed on exit, the only file it writes is
 `<dir>/last-cycle.json`, which it removes first, so a skip never leaves a stale one. It never touches `state.json`. A wrong argument count, or a third argument other than `-`, is
 exit 2 with no stdout. The `cycle-note:` key changes nothing about a sync's stdout or `state.json`.
+
+`narrative` prints `tracker=absent` (exit 0), `tracker=malformed` and `reason=<token>` (exit 1),
+or `tracker=present` and `narrative=off` (exit 0) when the key is absent or `off`. With the key on
+it prints `result=skip` and `reason=no-snapshot` (exit 1) when `<dir>/state.json` does not exist,
+else `tracker=present`, `url=`, `dir=`, `file=<dir>/state.json`, `collection=harness`,
+`doc=narrative` and `result=ready`. It makes no `gh` call and writes nothing; an extra argument is
+exit 2. The `narrative:` key changes nothing about a sync's stdout or `state.json`.
 
 ## The snapshot document
 
@@ -162,7 +205,7 @@ issue, means a sync carries a single `if_version` (the database refuses a write 
 document without one), needs no chunking and no deletes for issues that leave scope, and updates
 the page atomically.
 
-`health` is the page's strip under the header. `ci` comes from one GET of the check runs on
+`health` feeds the header's status line. `ci` comes from one GET of the check runs on
 `mainSha` (checked as lowercase hex before it enters the API path). Only the newest run of each
 check name counts. Then, first match wins: `failing` if any is completed with a conclusion other
 than `success`, `neutral` or `skipped`; `pending` if any is not completed; otherwise `passing`; `null`
@@ -231,6 +274,39 @@ sections/last-cycle: {schema:1, title:"Last cycle", order:-1, kind:"list", title
   tools, so they never write it. An existing page shows the note without titles or PR links until
   it is re-published.
 
+## The narrative
+
+With `narrative: on`, the `tracker` skill's Sync ends with the Narrative refresh
+(`skills/tracker/references/narrative.md`), so it runs after each successful Sync, the
+`issue-cycle` closing step's included, and on request. Unlike the snapshot and the cycle note, these
+documents are composed by the orchestrating session:
+
+```
+harness/narrative: {schema:1, lead, notes:{"<issue number>": text}, updated}
+sections/gaps:     {schema:1, title, order, kind:"cards", narrative:true, text?, cards:[{title, text?, fix?}], updated}
+sections/next:     {schema:1, title, order, kind:"steps", narrative:true, steps:[{title, text?}], updated}
+```
+
+- **What the page does with them.** `lead` is the paragraph under the title. A note shows as one
+  muted line under its issue wherever that issue's row appears (a milestone, "Waiting on you", a
+  phases section, and under a shipped PR's linked issue). The page cuts a lead at 700 characters
+  and a note at 400, and shows at most 12 cards and 12 steps.
+- **What the session writes.** A lead; one note for each open issue that is held, parked,
+  external, blocked, needs a human, waits on another issue or is listed in `waitingOnYou`; up to
+  8 gap cards and 6 next steps. It replaces `sections/gaps` and `sections/next` only when they
+  do not exist or carry `narrative: true`, so a hand-written document with either id is kept. On
+  an existing `path` section it updates only the nodes' `state` and `sub`; it never creates one.
+  It never writes the snapshot, a people item, the cycle note or any other section.
+- **Cost and exposure.** The refresh reads the snapshot, so issue and PR titles enter the
+  session's context (the Sync alone keeps them out), and it costs model tokens on every cycle.
+  That is why the key is off by default.
+- **Trust.** The text is model-written from GitHub data and earlier narrative. It is display
+  only: nothing reads it back as an instruction or an approval, nothing is copied to GitHub, and
+  the page renders it as text. It can be wrong or out of date between cycles; the state pills and
+  counts beside it always come from the snapshot. The footer shows when it was last refreshed.
+- **Where it runs.** Only where the artifact tools exist (see "Where it runs"). Turning the key
+  off leaves the last documents in place until a Hand-written update deletes them.
+
 ## Repo-file sections
 
 Each `section:` line projects one table or list from a committed Markdown file onto the page. On
@@ -276,7 +352,7 @@ so eight large sections plus a large issue set can make the whole sync skip with
 
 ## Recently shipped and waiting on you
 
-Two page blocks, "Waiting on you" then "Recently shipped", read four snapshot keys that
+Two page blocks, "Waiting on you" and "What shipped", read four snapshot keys that
 `bin/tracker-sync.sh` projects in a second jq pass over the finished snapshot. A snapshot without
 those keys, or a page without the blocks, shows no such block; the page needs a manual re-publish
 (above) to gain them.
@@ -360,17 +436,40 @@ before this reason existed shows the raw token until it is re-published.
 - **Hand-written update**, only on request: `sections/<id>` and `people/<id>` documents.
 
 ```
-sections/<id>: {schema:1, title, order:int, kind:"text"|"list"|"phases"|"matrix", text?,
+sections/<id>: {schema:1, title, order:int,
+                kind:"text"|"list"|"phases"|"matrix"|"path"|"cards"|"steps", text?,
                 titles?:bool, items?:[{text, issues?:[n], pr?:n}], phases?:[{name, text?, issues:[n]}],
                 columns?:[string], rows?:[{label, cells:[{state, text?}], issues?:[n]}],
-                legend?:{<state>:string}, source?, updated}
-people/<id>:   {schema:1, title, who?, state:"open"|"in-progress"|"done"|"unconfirmed",
+                legend?:{<state>:string},
+                nodes?:[{id, label, sub?, state, after?:[id], needs?:[string]}],
+                cards?:[{title, text?, fix?}], steps?:[{title, text?}],
+                source?, updated}
+people/<id>:   {schema:1, title, kind?, who?, needs?, state:"open"|"in-progress"|"done"|"unconfirmed",
                 note?, issues?:[n], updated}
 ```
 
+For every kind except `text`, `text` is a short paragraph under the section's heading. A section
+whose `order` is below 0 is shown above the people and shipped blocks, the others below them. In a
+section's or people item's text, a `#<n>` becomes a link to that issue of the repo.
+
+A `path` section is a diagram of steps. Each node is a box with a `label`, an optional small line
+`sub`, and a `state` of `done`, `active`, `ready`, `late` or `waiting` (any other value draws as
+`waiting`, not started). `after` lists the ids of the steps it follows, drawn as arrows; a node
+sits one column to the right of the latest step it follows. `needs` lists what the step waits on,
+drawn as a dashed box above it. The page draws at most 24 nodes and 3 `needs` lines per node, and
+cuts a label at 26 characters and a `sub` or `needs` line at 30; a node with an empty or repeated
+id is left out, and the diagram scrolls sideways inside its card when it is wider than the page.
+
+A `cards` section is a grid of cards, each a `title`, a `text` and a `fix` line shown after
+"Fix:". A `steps` section is a numbered list of `title` and `text`.
+
+A people item's `kind` is a short label above its title (for example Decision, Access, Review),
+`who` is the owner, `needs` says what it is needed for (the column appears when any item has
+one), and `note` is the line under the title.
+
 A `matrix` section is a status grid. A cell's `state` is one of `good`, `partial`, `bad`, `waiting`
 or `none`, shown in the page's done, waiting, bad, active and muted colours; any other value
-renders as `none`. A cell with no `text` shows its state word (blank for `none`). The page shows at
+renders as `none`. A cell with no `text` shows its state word (a dash for `none`). The page shows at
 most 20 columns, 200 rows, 10 issue links per row and 120 characters per value, and says when it has
 dropped columns or rows. At phone width the grid scrolls sideways inside its card.
 

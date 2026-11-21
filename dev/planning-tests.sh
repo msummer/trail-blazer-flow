@@ -13862,13 +13862,16 @@ case_tracker_page() {
   expect_floor_line "reason=bad-repo-name"
 }
 
-# tracker-template-generic — the shipped page carries no project content or external resource,
-# and renders no db text through innerHTML.
+# tracker-template-generic — the shipped page carries no project content, renders no db text
+# through innerHTML, and names no external address except the two font hosts and the SVG
+# namespace (an identifier, never fetched).
 case_tracker_template_generic() {
-  local f="$root/templates/tracker/index.html" s
+  local f="$root/templates/tracker/index.html" s body
   [ -f "$f" ] || { __ok=0; __why="${__why}template missing\n"; return; }
+  body="$(sed -e 's#https://fonts\.googleapis\.com##g' -e 's#https://fonts\.gstatic\.com##g' \
+    -e 's#"http://www\.w3\.org/2000/svg"##g' "$f")"
   for s in 'http://' 'https://' 'localStorage' '<script src' 'innerHTML'; do
-    grep -qF -- "$s" "$f" && { __ok=0; __why="${__why}template contains $s\n"; }
+    grep -qF -- "$s" <<<"$body" && { __ok=0; __why="${__why}template contains $s\n"; }
   done
   grep -qF -- '@REPO_NAME@' "$f" || { __ok=0; __why="${__why}template lacks @REPO_NAME@\n"; }
 }
@@ -14539,6 +14542,90 @@ case_tracker_cycle_note_usage() {
   expect_no_log "$dir/.gh-calls"
 }
 
+# mutant:narrative-key-once — drops the more-than-one-narrative-line check, so a repeated key is
+# accepted instead of bad-narrative.
+#
+# mutant:narrative-default-on — makes an absent or off key behave as on, so narrative mode names
+# the snapshot for a refresh the fence never asked for.
+#
+# mutant:narrative-no-snapshot — drops the snapshot-exists check, so narrative mode reports ready
+# and names a state.json that is not there.
+
+# tracker-malformed-bad-narrative — a narrative: line that is not exactly on or off, or that
+# repeats, is bad-narrative, checked after bad-cycle-note; the key is case-sensitive.
+case_tracker_malformed_bad_narrative() {
+  local v
+  for v in 'narrative: yes' 'narrative:' 'narrative: On' "$(printf 'narrative: on\nnarrative: on')"; do
+    tk_malformed tracker-malformed-bad-narrative "$(printf 'url: https://example.invalid/a\n%s' "$v")" bad-narrative
+  done
+  tk_malformed tracker-malformed-bad-narrative "$(printf 'url: https://example.invalid/a\ncycle-note: yes\nnarrative: yes')" bad-cycle-note
+  tk_malformed tracker-malformed-bad-narrative "$(printf 'url: https://example.invalid/a\nNarrative: on')" unknown-key
+}
+
+# tracker-narrative-mode — narrative mode: off or absent key, no section and a malformed section
+# name nothing; with the key on it skips until a snapshot exists, then names it; it never calls gh
+# and never changes a sync's stdout or state.json. An extra argument is exit 2.
+case_tracker_narrative_mode() {
+  local dir fence out0 st0
+  dir="$(mk_fixture tracker-narrative-mode)"
+  build_tracker_env "$dir"
+  for fence in 'url: https://example.invalid/artifact/abc' "$(printf 'url: https://example.invalid/artifact/abc\nnarrative: off')"; do
+    tk_claude "$dir" "$fence"
+    run_tracker "$dir" narrative
+    expect_rc 0
+    [ "$planning_out" = "$(printf 'tracker=present\nnarrative=off')" ] || { __ok=0; __why="${__why}off stdout: got $planning_out\n"; }
+  done
+  printf '# Project\n' > "$dir/work/CLAUDE.md"
+  run_tracker "$dir" narrative
+  expect_rc 0
+  [ "$planning_out" = "tracker=absent" ] || { __ok=0; __why="${__why}absent stdout: got $planning_out\n"; }
+  tk_claude "$dir" 'name: x'
+  run_tracker "$dir" narrative
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'tracker=malformed\nreason=unknown-key')" ] || { __ok=0; __why="${__why}malformed stdout: got $planning_out\n"; }
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nnarrative: on')"
+  run_tracker "$dir" narrative
+  expect_rc 1
+  [ "$planning_out" = "$(printf 'result=skip\nreason=no-snapshot')" ] || { __ok=0; __why="${__why}no-snapshot stdout: got $planning_out\n"; }
+  run_tracker "$dir" narrative extra
+  expect_rc 2
+  expect_empty_out
+  expect_no_log "$dir/.gh-calls"
+  tk_claude "$dir" 'url: https://example.invalid/artifact/abc'
+  run_tracker "$dir"
+  expect_rc 0
+  out0="$planning_out"
+  st0="$(cat "$(tk_state_file "$dir")")"
+  tk_claude "$dir" "$(printf 'url: https://example.invalid/artifact/abc\nnarrative: on')"
+  run_tracker "$dir"
+  expect_rc 0
+  [ "$planning_out" = "$out0" ] || { __ok=0; __why="${__why}narrative: on changed the sync stdout\n"; }
+  [ "$(cat "$(tk_state_file "$dir")")" = "$st0" ] || { __ok=0; __why="${__why}narrative: on changed state.json\n"; }
+  : > "$dir/.gh-calls"
+  run_tracker "$dir" narrative
+  expect_rc 0
+  expect_floor_first "tracker=present"
+  expect_floor_line "url=https://example.invalid/artifact/abc"
+  expect_floor_line "file=$(tk_real "$dir")/trail-blazer/tracker/state.json"
+  expect_floor_line "collection=harness"
+  expect_floor_line "doc=narrative"
+  expect_floor_line "result=ready"
+  expect_no_log "$dir/.gh-calls"
+  [ "$(cat "$(tk_state_file "$dir")")" = "$st0" ] || { __ok=0; __why="${__why}narrative mode changed state.json\n"; }
+}
+
+# tracker-template-path-states — the template's path-diagram state list (PSTATES) and its CSS node
+# rules are the same set, so no listed state draws in the not-started colour by accident.
+# mutant:path-css-drop — deletes the late state's node rule, so a listed state has no colour.
+case_tracker_template_path_states() {
+  local f="$root/templates/tracker/index.html" js css
+  [ -f "$f" ] || { __ok=0; __why="${__why}template missing\n"; return; }
+  js="$(sed -n 's/^  var PSTATES = \[\(.*\)\];$/\1/p' "$f" | tr -d ' "' | tr ',' '\n' | grep -v '^waiting$' | sort)"
+  css="$(sed -n 's/^svg \.node\.\([a-z]*\) {.*/\1/p' "$f" | sort -u)"
+  [ -n "$js" ] || { __ok=0; __why="${__why}PSTATES line not found\n"; return; }
+  [ "$js" = "$css" ] || { __ok=0; __why="${__why}PSTATES and the node CSS rules differ\n"; }
+}
+
 # ---------------------------------------------------------------------------------------------
 # name|fn|desc
 cases=(
@@ -14882,6 +14969,9 @@ cases=(
   "tracker-cycle-note-reject|case_tracker_cycle_note_reject|#650: each invalid ledger line, run id and an oversized ledger skips by reason and line number, leaves no stale document and echoes no ledger text"
   "tracker-cycle-note-vocab|case_tracker_cycle_note_vocab|#650: every outcome, seed bucket and deploy slug of bin/reconcile-ledger.sh is accepted by cycle-note mode"
   "tracker-cycle-note-usage|case_tracker_cycle_note_usage|#650: a wrong argument count or a third argument other than - is exit 2 with no stdout and no gh call"
+  "tracker-malformed-bad-narrative|case_tracker_malformed_bad_narrative|a narrative: value other than on or off, or a repeated key, is bad-narrative, checked after bad-cycle-note"
+  "tracker-narrative-mode|case_tracker_narrative_mode|narrative mode names the snapshot only with the key on and a snapshot present, calls no gh and leaves the sync unchanged"
+  "tracker-template-path-states|case_tracker_template_path_states|the template's path states and its node CSS rules are the same set"
 )
 
 # MEASURED MUTANTS (#275/#281) — #281 replaced #275's exclusion-based $planC test

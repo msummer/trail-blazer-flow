@@ -492,11 +492,12 @@ generic subagents need:
     eight `section: <id> <path>#<heading>` lines, each naming a committed `.md` file whose table
     or list under that heading the sync projects onto the page, and optionally up to eight
     `label-state: <label>=<state>` lines mapping one of the repo's own labels to `parked`,
-    `external` or `held`, and optionally one `cycle-note: on|off` line (blank lines and `#`
+    `external` or `held`, and optionally one `cycle-note: on|off` line and one
+    `narrative: on|off` line (blank lines and `#`
     comment lines are allowed; any other line is an unknown key). It is read by
     `bin/tracker-sync.sh` and the `tracker` skill only: no section means no tracker, never an
     error. A malformed section (`no-fence`, `unknown-key`, `no-url`, `multiple-urls`, `bad-url`,
-    `bad-section`, `bad-label-state` or `bad-cycle-note`) makes each sync report `tracker=malformed` and skip. The doctor does not validate it. See
+    `bad-section`, `bad-label-state`, `bad-cycle-note` or `bad-narrative`) makes each sync report `tracker=malformed` and skip. The doctor does not validate it. See
     [tracker.md](tracker.md) for the page, the snapshot and the limits.
 
 12. **Append-only changelog** (optional) — a section titled exactly "Append-only changelog" at any

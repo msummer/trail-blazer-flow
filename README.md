@@ -193,7 +193,7 @@ to the skills:
 | "Run harness-setup" | `harness-setup` | Checks the installation, audits `CLAUDE.md`, and refreshes the baseline |
 | "Start a new project" | `project-kickoff` | The greenfield on-ramp ([Path A](#path-a--start-a-brand-new-project)) |
 | "Run the test ratchet" | `test-ratchet` | Files issues that close test-coverage gaps. Opt-in, see [the CLAUDE.md contract](#the-claudemd-contract) |
-| "Create a tracker" / "Sync the tracker" | `tracker` | Creates a private live page of issue states, PRs and milestone progress, and refreshes it from GitHub. Opt-in, see [docs/reference/tracker.md](docs/reference/tracker.md) |
+| "Create a tracker" / "Sync the tracker" | `tracker` | Creates a private live page of progress, what is waiting on you, what shipped and every milestone's issues, and refreshes it from GitHub. Opt-in, see [Follow progress on a live tracker](#follow-progress-on-a-live-tracker) |
 
 You can also call a skill directly, for example `/trail-blazer-flow:issue-cycle`.
 
@@ -244,6 +244,37 @@ without you. `waiting_on_human` lists what needs you: `plans_to_review`, `prs_to
 with its CI state), `blocked`, `followups_to_triage`, `escalations`, and `stop_routes`. If
 `degraded` is `true`, a GitHub query failed and one of those lists may be incomplete. The
 `degraded_reasons` field says which one.
+
+### Follow progress on a live tracker
+
+The tracker is an optional private web page for the repo, for you and anyone you share it with.
+It opens with a summary: how far the milestones are, what can move now, and what is waiting on a
+person. Below that come the things people need to provide, what shipped in the last 14 days, and
+every open milestone's issues with their state and PR.
+
+```text
+Create a tracker
+```
+
+That publishes the page and drafts a "Tracker" section for `CLAUDE.md` holding its address.
+Commit the section once you have reviewed it. From then on every `issue-cycle` run refreshes the
+page as its last step, and "Sync the tracker" refreshes it on demand.
+
+Three things you can add:
+
+- **Your own sections.** Ask for one in plain words, for example "add a tracker section showing
+  the path to the pilot" or "add a people item: Priya sends the sandbox key". Sections can be a
+  step diagram, cards, numbered steps, a status grid, a list or text.
+- **Tables from the repo.** A `section:` line in the "Tracker" section shows a table or list from
+  a committed Markdown file.
+- **A written summary.** Add `narrative: on` to the "Tracker" section and each cycle also writes
+  a short lead, a one-line note under each waiting issue, the gaps it sees and the next steps.
+  This is off by default: it costs model tokens every cycle, and it is written by the model, so
+  read it as a summary and trust the state pills beside it.
+
+The page only shows GitHub's state; nothing you do on it changes an issue or a PR. It needs an
+interactive Claude Code session to refresh (Codex and headless runs skip it). The full rules are
+in [docs/reference/tracker.md](docs/reference/tracker.md).
 
 ### Unblock an issue
 
@@ -497,7 +528,7 @@ item, including every hard floor, are in
 | 8 | `Autonomy decision record` | Optional | A human-applied grant label, plus the record an issue body must carry to qualify |
 | 9 | `Autonomy mode` | Optional | `mode: autonomous` turns items 4 and 5 on together (see [Autonomous mode](#autonomous-mode)) |
 | 10 | `Governance paths` | Optional | Extra paths the merge floor always holds for a human |
-| 11 | `Tracker` | Optional | The URL of the repo's live tracker page and optional `section:` lines naming repo files to project onto it, `label-state:` lines mapping labels to display states, and an optional `cycle-note: on` line, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
+| 11 | `Tracker` | Optional | The URL of the repo's live tracker page and optional `section:` lines naming repo files to project onto it, `label-state:` lines mapping labels to display states, and optional `cycle-note: on` and `narrative: on` lines, read by the `tracker` skill ([tracker.md](docs/reference/tracker.md)) |
 | 12 | `Append-only changelog` | Optional | The changelog file and section that only ever grows, so a full-auto run can build issues that share it in parallel and settle its merge conflict mechanically ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 | 13 | `Post-merge CI` | Optional | The workflows the serial merge train (Autonomous mode or full auto) waits for after each merge, and how long, so a red that only post-merge CI shows stops the run (full auto fixes it forward once). Needs the `Bash(gh run list:*)` grant ([claude-md-contract.md](docs/reference/claude-md-contract.md)) |
 
@@ -857,6 +888,8 @@ lives in [`docs/reference/`](docs/reference/README.md):
   floor, plus `LESSONS.md` and `BASELINE.md`
 - [The per-repo settings file](docs/reference/settings.md): every grant and deny
 - [Safety model](docs/reference/safety-model.md): hooks, provenance, trust gates, and the lock
+- [The live tracker](docs/reference/tracker.md): the page, the "Tracker" section, hand-written
+  sections, the narrative, and its limits
 - [Architecture](docs/reference/architecture.md): repo layout, model tiering, and distribution
 - [Codex compatibility](docs/reference/codex.md): running this plugin on the Codex CLI —
   `codex-setup.sh`, the rules file, contract loading, the support matrix, removing the Codex

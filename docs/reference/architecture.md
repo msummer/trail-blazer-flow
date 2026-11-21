@@ -29,7 +29,8 @@
 │   ├── issue-cycle/references/full-auto.md  # one-run full-auto procedure (read on demand)
 │   ├── issue-cycle/references/cycle-note.md  # opt-in tracker cycle note push procedure (read on demand, #650)
 │   ├── test-ratchet/SKILL.md     # optional, policy-gated: files coverage-increasing issues (never implements)
-│   └── tracker/SKILL.md          # optional live tracker: creates the artifact page and syncs it; orchestrating session only (#622)
+│   ├── tracker/SKILL.md          # optional live tracker: creates the artifact page and syncs it; orchestrating session only (#622)
+│   └── tracker/references/narrative.md  # opt-in narrative refresh procedure (read on demand)
 ├── bin/                          # on the Bash PATH when the plugin is enabled, on Claude Code — never on Codex (#408, ADR 0002 P5)
 │   ├── check-harness.sh           # mechanical preflight ("doctor"); safe to re-run any time
 │   ├── check-decision-record.sh   # scoped-autonomy: checks an issue body against a declared decision record
